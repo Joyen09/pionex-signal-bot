@@ -1,0 +1,38 @@
+# 派網訊號機器人 - Docker Compose
+#
+# 用法：
+#   1. 準備好 .env 與 config.yaml（參考 .env.example / config.example.yaml）
+#   2. 只跑策略機器人：       docker compose up -d strategy
+#   3. 只跑 Webhook 伺服器：  docker compose up -d webhook
+#   4. 兩個都跑：             docker compose up -d
+#   5. 看日誌：               docker compose logs -f
+#
+# 注意：strategy 與 webhook 共用同一個 data 目錄（同一份持倉/記錄）。
+#      若要各自獨立，請改用不同的 volume 與 config。
+
+services:
+  strategy:
+    build: .
+    image: pionex-signal-bot
+    container_name: pionex-strategy
+    restart: unless-stopped
+    env_file: .env
+    command: ["run-strategy"]
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data
+      - ./logs:/app/logs
+
+  webhook:
+    build: .
+    image: pionex-signal-bot
+    container_name: pionex-webhook
+    restart: unless-stopped
+    env_file: .env
+    command: ["run-webhook"]
+    ports:
+      - "8080:8080"        # 對外提供 webhook 端點（記得搭配反向代理 + HTTPS）
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data
+      - ./logs:/app/logs

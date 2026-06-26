@@ -10,6 +10,13 @@
     python main.py status          # 顯示目前持倉與最近交易
     python main.py buy  --quote 20 # 手動下一筆市價買單
     python main.py sell --base 0.001  # 手動市價賣出
+    python main.py backtest        # 用歷史 K 線回測策略
+
+回測參數：
+    --strategy ma_cross   指定策略（預設讀 config）
+    --interval 5M         K 線週期
+    --limit 1000          回測用的 K 線根數
+    --cash 1000           起始資金
 
 共用參數：
     --config config.yaml   指定設定檔
@@ -117,6 +124,38 @@ def cmd_run_webhook(bot: Bot) -> int:
     return 0
 
 
+def cmd_backtest(bot: Bot, args) -> int:
+    from pionexbot.backtest import Backtester
+    from pionexbot.strategy import build_strategy
+
+    cfg = bot.cfg
+    scfg = cfg.strategy
+    name = args.strategy or scfg.get("name", "ma_cross")
+    interval = args.interval or scfg.get("interval", "5M")
+    limit = args.limit or 1000
+
+    print(f"抓取 {cfg.symbol} {interval} 共 {limit} 根 K 線 ...")
+    try:
+        klines = bot.client.get_klines(cfg.symbol, interval, limit=limit)
+    except PionexError as exc:
+        print(f"❌ 抓 K 線失敗：{exc}")
+        return 1
+    if len(klines) < 30:
+        print(f"❌ K 線資料太少（{len(klines)} 根），無法回測")
+        return 1
+
+    strategy = build_strategy(name, scfg.get("params", {}))
+    bt = Backtester(
+        strategy,
+        start_cash=args.cash or 1000.0,
+        quote_per_trade=float(cfg.trading.get("quote_per_trade", 100)),
+        max_position_base=float(cfg.risk.get("max_position_base", 0)) or None,
+    )
+    result = bt.run(klines, cfg.symbol)
+    print(result.summary())
+    return 0
+
+
 def cmd_manual(bot: Bot, action: Action, quote: float | None, base: float | None) -> int:
     sig = Signal(action=action, symbol=bot.cfg.symbol, source="manual:cli",
                  quote_amount=quote, base_size=base, reason="手動下單")
@@ -129,10 +168,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="派網訊號機器人")
     parser.add_argument("command",
                         choices=["test", "balance", "price", "status",
-                                 "run-strategy", "run-webhook", "buy", "sell"])
+                                 "run-strategy", "run-webhook", "buy", "sell",
+                                 "backtest"])
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--quote", type=float, help="買入金額（報價幣）")
     parser.add_argument("--base", type=float, help="賣出數量（基礎幣）")
+    parser.add_argument("--strategy", help="回測指定策略")
+    parser.add_argument("--interval", help="K 線週期")
+    parser.add_argument("--limit", type=int, help="回測 K 線根數")
+    parser.add_argument("--cash", type=float, help="回測起始資金")
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -150,6 +194,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_run_strategy(bot)
         if args.command == "run-webhook":
             return cmd_run_webhook(bot)
+        if args.command == "backtest":
+            return cmd_backtest(bot, args)
         if args.command == "buy":
             return cmd_manual(bot, Action.BUY, args.quote or
                               float(cfg.trading.get("quote_per_trade", 20)), None)

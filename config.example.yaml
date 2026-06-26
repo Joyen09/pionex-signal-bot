@@ -25,12 +25,25 @@ risk:
   allow_short: false           # 現貨不可做空；保留給未來合約
 
 strategy:
-  name: ma_cross        # 內建策略：均線交叉
+  # 可用策略：ma_cross / rsi / macd / bollinger
+  name: ma_cross
   interval: 5M          # K 線週期：1M 5M 15M 30M 60M 4H 8H 12H 1D
   poll_seconds: 30      # 多久抓一次 K 線重新評估
   params:
+    # --- ma_cross ---
     fast: 9             # 快線週期
     slow: 21            # 慢線週期
+    # --- rsi（換成 name: rsi 時使用）---
+    # period: 14
+    # oversold: 30
+    # overbought: 70
+    # --- macd（換成 name: macd 時使用）---
+    # fast: 12
+    # slow: 26
+    # signal: 9
+    # --- bollinger（換成 name: bollinger 時使用）---
+    # period: 20
+    # num_std: 2.0
 
 webhook:
   host: 0.0.0.0
