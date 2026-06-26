@@ -1,0 +1,47 @@
+# 派網訊號機器人設定範本。
+# 複製為 config.yaml 後修改。機密（API 金鑰）請放在 .env，不要寫在這裡。
+
+# 執行模式：
+#   paper = 紙上交易（不下真實單，只模擬與記錄）  <-- 強烈建議先用這個
+#   live  = 實盤交易（會用真錢下單）
+mode: paper
+
+exchange:
+  base_url: https://api.pionex.com
+  market: spot          # 目前支援 spot；futures 之後擴充
+
+trading:
+  symbol: BTC_USDT      # 交易對，格式為 BASE_QUOTE
+  order_type: MARKET    # MARKET 或 LIMIT
+  quote_per_trade: 20   # 每次「買入」要花多少報價幣（USDT）
+  # LIMIT 單才會用到：掛單價相對市價的偏移百分比（買單往下、賣單往上）
+  limit_offset_pct: 0.1
+
+risk:
+  max_quote_per_trade: 50      # 單筆買入金額上限（USDT），超過拒絕
+  max_position_base: 0.01      # 最多持有的基礎幣數量（BTC），超過不再買
+  daily_loss_limit_quote: 50   # 當日已實現虧損達此值（USDT）即停止交易
+  cooldown_seconds: 60         # 兩筆交易最短間隔，避免訊號連發
+  allow_short: false           # 現貨不可做空；保留給未來合約
+
+strategy:
+  name: ma_cross        # 內建策略：均線交叉
+  interval: 5M          # K 線週期：1M 5M 15M 30M 60M 4H 8H 12H 1D
+  poll_seconds: 30      # 多久抓一次 K 線重新評估
+  params:
+    fast: 9             # 快線週期
+    slow: 21            # 慢線週期
+
+webhook:
+  host: 0.0.0.0
+  port: 8080
+  path: /webhook        # 訊號來源 POST 的路徑
+  # 共享密鑰從環境變數 WEBHOOK_SECRET 讀取（見 .env）
+
+notify:
+  telegram:
+    enabled: false      # 設 true 並在 .env 填 token/chat_id 後啟用
+
+logging:
+  level: INFO           # DEBUG / INFO / WARNING / ERROR
+  file: logs/bot.log

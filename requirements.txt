@@ -1,0 +1,7 @@
+# 派網訊號機器人相依套件
+requests>=2.31.0          # 呼叫派網 REST API
+PyYAML>=6.0              # 讀取 config.yaml
+python-dotenv>=1.0.0     # 載入 .env 內的 API 金鑰等機密
+fastapi>=0.110.0         # Webhook 接收伺服器 (TradingView / 通用)
+uvicorn>=0.29.0          # 執行 FastAPI 的 ASGI server
+pandas>=2.0.0            # 技術指標計算 (內建策略)

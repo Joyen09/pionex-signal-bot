@@ -1,0 +1,30 @@
+# 機密：絕對不要提交真正的 API 金鑰
+.env
+*.env
+!.env.example
+
+# 設定檔（含個人交易參數）；範本是 config.example.yaml
+config.yaml
+
+# 執行期資料
+data/
+*.db
+*.sqlite
+*.sqlite3
+logs/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# 編輯器 / 系統
+.vscode/
+.idea/
+.DS_Store
