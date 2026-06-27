@@ -55,7 +55,7 @@ class GridRunner:
             lower, upper = float(self.lower_cfg), float(self.upper_cfg)
         state = {"active": True, "lower": lower, "upper": upper,
                  "grids": self.grids, "held": {}, "realized": 0.0,
-                 "created_price": price}
+                 "created_price": price, "last_price": price}
         self.store.save_grid_state(state)
         self.notifier.send(
             f"🔲 開新網格：{lower:.2f}~{upper:.2f}（{self.grids} 格 / 每格 "
@@ -98,6 +98,7 @@ class GridRunner:
         lower, upper = state["lower"], state["upper"]
         levels = self._levels(lower, upper)
         held = {int(k): v for k, v in state.get("held", {}).items()}
+        last = state.get("last_price", price)   # 上一輪價格，用來判斷「穿越」
 
         # 風險檢查：跌破下緣 or 未實現虧損超限 → 關閉並重開
         unreal = sum(q * (price - levels[i]) for i, q in held.items())
@@ -116,11 +117,11 @@ class GridRunner:
             self._new_grid(price)
             return
 
-        # 正常網格成交
-        changed = False
+        # 正常網格成交：只在價格「穿越」某格線時才成交那一格
         for i in range(self.grids):
             buy_px, sell_px = levels[i], levels[i + 1]
-            if i in held and price >= sell_px:
+            # 賣出：持有，且價格由下『向上穿過』上一格
+            if i in held and last < sell_px <= price:
                 res = self.broker.market_sell(self.symbol, held[i])
                 if res.ok:
                     profit = (res.avg_price - buy_px) * res.filled_base
@@ -130,15 +131,14 @@ class GridRunner:
                         quote=res.filled_quote, price=res.avg_price,
                         simulated=res.simulated, source="grid", realized_pnl=profit)
                     del held[i]
-                    changed = True
                     # 成交頻繁：只記 log、不外推通知
                     self.notifier.send(f"🟢 網格賣出 @ {res.avg_price:.2f}（+{profit:.2f}）",
                                        "info", push=False)
-            if i not in held and price <= buy_px:
+            # 買入：未持有，且價格由上『向下穿過』該格
+            if i not in held and last > buy_px >= price:
                 res = self.broker.market_buy(self.symbol, self.quote_per_grid)
                 if res.ok:
                     held[i] = res.filled_base
-                    changed = True
                     self.store.record_trade(
                         symbol=self.symbol, side="BUY", base=res.filled_base,
                         quote=res.filled_quote, price=res.avg_price,
@@ -146,9 +146,9 @@ class GridRunner:
                     self.notifier.send(f"🔴 網格買入 @ {res.avg_price:.2f}",
                                        "info", push=False)
 
-        if changed:
-            state["held"] = {str(k): v for k, v in held.items()}
-            self.store.save_grid_state(state)
+        state["held"] = {str(k): v for k, v in held.items()}
+        state["last_price"] = price
+        self.store.save_grid_state(state)
 
     def run_forever(self) -> None:
         self._running = True

@@ -93,13 +93,14 @@ class GridBacktester:
         if not ohlc:
             raise ValueError("沒有 K 線資料")
         first_close = ohlc[0][2]
+        prev = first_close   # 上一根收盤，用來判斷「穿越」
 
-        for high, low, _close in ohlc:
+        for high, low, close in ohlc:
             for i in range(n):           # 第 i 條線掛買、第 i+1 條線掛賣
                 buy_px = levels[i]
                 sell_px = levels[i + 1]
-                # 先處理賣出：持有且當根最高價觸及上一格
-                if i in held and high >= sell_px:
+                # 賣出：之前在下方，這根高點向上穿過上一格
+                if i in held and prev < sell_px <= high:
                     qty = held.pop(i)
                     proceeds = qty * sell_px * (1 - self.fee_rate)
                     cost = qty * buy_px        # 當初的買入名目
@@ -107,13 +108,14 @@ class GridBacktester:
                     realized += proceeds - cost
                     sells += 1
                     completed += 1
-                # 再處理買入：未持有且當根最低價觸及該格、且資金足夠
-                if i not in held and low <= buy_px and cash >= self.quote_per_grid:
+                # 買入：之前在上方，這根低點向下穿過該格、且資金足夠
+                if i not in held and prev > buy_px >= low and cash >= self.quote_per_grid:
                     spend = self.quote_per_grid
                     qty = (spend - spend * self.fee_rate) / buy_px
                     cash -= spend
                     held[i] = qty
                     buys += 1
+            prev = close
 
         final_price = ohlc[-1][2]
         inventory_qty = sum(held.values())
