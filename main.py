@@ -13,6 +13,7 @@
     python main.py backtest        # 用歷史 K 線回測策略
     python main.py backtest-sweep  # 掃描停損/停利組合，推薦最佳參數
     python main.py optimize        # walk-forward 最佳化（嚴謹驗證是否真有優勢）
+    python main.py grid-backtest   # 網格交易回測（--lower --upper --grids）
 
 回測參數：
     --strategy ma_cross   指定策略（預設讀 config）
@@ -270,6 +271,39 @@ def cmd_optimize(bot: Bot, args) -> int:
     return 0
 
 
+def cmd_grid_backtest(bot: Bot, args) -> int:
+    from pionexbot.grid import GridBacktester, _ohlc
+
+    cfg = bot.cfg
+    interval = args.interval or "4H"
+    limit = args.limit or 2000
+
+    print(f"抓取 {cfg.symbol} {interval} 共 {limit} 根 K 線 ...")
+    try:
+        klines = bot.client.get_klines_history(cfg.symbol, interval, total=limit)
+    except PionexError as exc:
+        print(f"❌ 抓 K 線失敗：{exc}")
+        return 1
+    if len(klines) < 50:
+        print(f"❌ K 線太少（{len(klines)}）")
+        return 1
+
+    first_close = _ohlc(klines[0])[2]
+    # 未指定區間時，預設用起始價 ±20% 當網格範圍（事前可知的合理選擇）
+    lower = args.lower or first_close * 0.8
+    upper = args.upper or first_close * 1.2
+    grids = args.grids or 20
+    quote = args.quote or 20.0
+
+    print(f"網格區間 {lower:.2f} ~ {upper:.2f}，{grids} 格，每格 {quote} USDT")
+    bt = GridBacktester(lower, upper, grids, quote_per_grid=quote)
+    result = bt.run(klines, cfg.symbol)
+    print(result.summary())
+    if result.unrealized < -result.start_cash * 0.1:
+        print("\n⚠️ 未實現虧損偏大：價格可能已跌破網格下緣（住套房），這是網格在跌勢的典型風險。")
+    return 0
+
+
 def cmd_notify_test(bot: Bot) -> int:
     n = bot.notifier
     print(f"Telegram 啟用：{n.tg_enabled}　LINE 啟用：{n.line_enabled}")
@@ -296,7 +330,7 @@ def main(argv: list[str] | None = None) -> int:
                         choices=["test", "balance", "price", "status",
                                  "run-strategy", "run-webhook", "buy", "sell",
                                  "backtest", "backtest-sweep", "optimize",
-                                 "notify-test"])
+                                 "grid-backtest", "notify-test"])
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--quote", type=float, help="買入金額（報價幣）")
     parser.add_argument("--base", type=float, help="賣出數量（基礎幣）")
@@ -304,6 +338,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--interval", help="K 線週期")
     parser.add_argument("--limit", type=int, help="回測 K 線根數")
     parser.add_argument("--cash", type=float, help="回測起始資金")
+    parser.add_argument("--lower", type=float, help="網格下緣價格")
+    parser.add_argument("--upper", type=float, help="網格上緣價格")
+    parser.add_argument("--grids", type=int, help="網格數量")
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -327,6 +364,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_backtest_sweep(bot, args)
         if args.command == "optimize":
             return cmd_optimize(bot, args)
+        if args.command == "grid-backtest":
+            return cmd_grid_backtest(bot, args)
         if args.command == "notify-test":
             return cmd_notify_test(bot)
         if args.command == "buy":

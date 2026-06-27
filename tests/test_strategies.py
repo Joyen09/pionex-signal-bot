@@ -159,6 +159,34 @@ def test_candle_time_extraction():
     assert StrategyRunner._candle_time({"close": 1}) is None
 
 
+def test_grid_profits_in_oscillation():
+    from pionexbot.grid import GridBacktester
+    osc = [100 + 10 * math.sin(i / 5) for i in range(600)]
+    kl = [{"high": c, "low": c, "close": c} for c in osc]
+    r = GridBacktester(90, 110, 20, quote_per_grid=20).run(kl, "X")
+    assert r.completed_grids > 0
+    assert r.realized_profit > 0          # 震盪應有實現利潤
+    assert r.total_return > 0
+
+
+def test_grid_bags_in_downtrend():
+    from pionexbot.grid import GridBacktester
+    down = [100 - (40 * i / 600) for i in range(600)]
+    kl = [{"high": c, "low": c, "close": c} for c in down]
+    r = GridBacktester(80, 120, 20, quote_per_grid=20).run(kl, "X")
+    assert r.unrealized < 0               # 跌勢會套牢
+    assert r.total_return < 0
+
+
+def test_grid_rejects_bad_range():
+    from pionexbot.grid import GridBacktester
+    try:
+        GridBacktester(110, 90, 20, quote_per_grid=20)
+    except ValueError:
+        return
+    raise AssertionError("lower>=upper 應報錯")
+
+
 if __name__ == "__main__":
     failed = 0
     for name, fn in sorted(globals().items()):
