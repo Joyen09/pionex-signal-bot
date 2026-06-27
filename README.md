@@ -149,7 +149,14 @@ docker compose logs -f             # 看即時日誌
 
 ## 交易通知（LINE / Telegram）
 
-機器人**實際成交**或**發生錯誤**時，可推播通知到你的手機。
+機器人會在以下時機推播通知到你的手機：
+
+- 🤖 **啟動**時
+- ✅ **實際成交**時（紙上或實盤）
+- ⚠️ **發生錯誤 / 異常結束**時
+- 📊 **每日損益摘要**（每天一次，可設時間）
+
+每日摘要時間由 `config.yaml` 的 `notify.daily_summary.utc_hour` 控制（UTC 時；台灣 = UTC+8，所以 `1` = 台灣早上 9 點），設 `enabled: false` 可關閉。
 
 > ⚠️ 舊的「LINE Notify」已於 2025/3/31 停用，本專案改用 **LINE Messaging API**。
 

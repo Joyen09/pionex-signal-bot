@@ -109,6 +109,10 @@ def cmd_run_strategy(bot: Bot) -> int:
         runner.run_forever()
     except KeyboardInterrupt:
         print("\n已停止。")
+        bot.notifier.send("🛑 策略機器人已手動停止。", "info", important=True)
+    except Exception as exc:  # noqa: BLE001 - 意外崩潰也要通知
+        bot.notifier.send(f"💥 策略機器人異常結束：{exc}", "error")
+        raise
     return 0
 
 

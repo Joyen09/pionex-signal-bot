@@ -93,5 +93,13 @@ class Store:
             "SELECT * FROM trades ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
 
+    def stats_since(self, ts: float) -> tuple[int, float]:
+        """回傳自 ts(秒) 以來的 (成交筆數, 已實現損益總和)。"""
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS c, COALESCE(SUM(realized_pnl), 0) AS p "
+            "FROM trades WHERE ts >= ?", (ts,)
+        ).fetchone()
+        return int(row["c"]), float(row["p"])
+
     def close(self) -> None:
         self.conn.close()
