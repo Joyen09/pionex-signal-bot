@@ -141,7 +141,7 @@ def cmd_backtest(bot: Bot, args) -> int:
 
     print(f"抓取 {cfg.symbol} {interval} 共 {limit} 根 K 線 ...")
     try:
-        klines = bot.client.get_klines(cfg.symbol, interval, limit=limit)
+        klines = bot.client.get_klines_history(cfg.symbol, interval, total=limit)
     except PionexError as exc:
         print(f"❌ 抓 K 線失敗：{exc}")
         return 1
@@ -172,7 +172,7 @@ def cmd_backtest_sweep(bot: Bot, args) -> int:
 
     print(f"抓取 {cfg.symbol} {interval} 共 {limit} 根 K 線，掃描停損/停利組合 ...")
     try:
-        klines = bot.client.get_klines(cfg.symbol, interval, limit=limit)
+        klines = bot.client.get_klines_history(cfg.symbol, interval, total=limit)
     except PionexError as exc:
         print(f"❌ 抓 K 線失敗：{exc}")
         return 1

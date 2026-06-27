@@ -119,13 +119,60 @@ class PionexClient:
     # ------------------------------------------------------------------ #
     # 公開行情（免簽章）
     # ------------------------------------------------------------------ #
+    MAX_KLINES_PER_REQUEST = 500   # 派網單次上限
+
+    @staticmethod
+    def _kline_time(k: Any) -> Optional[int]:
+        if isinstance(k, dict):
+            for key in ("time", "t", "timestamp", "openTime", "T"):
+                if key in k:
+                    return int(k[key])
+        elif isinstance(k, (list, tuple)) and k:
+            return int(k[0])
+        return None
+
     def get_klines(self, symbol: str, interval: str = "5M",
-                   limit: int = 100) -> list[dict[str, Any]]:
-        """取得 K 線。回傳 list，每筆含 open/high/low/close/volume/time。"""
-        data = self._request("GET", "/api/v1/market/klines",
-                             query={"symbol": symbol, "interval": interval, "limit": limit})
+                   limit: int = 100, end_time: Optional[int] = None) -> list[dict[str, Any]]:
+        """取得 K 線（單次，limit 上限 500）。回傳 list，每筆含 close/time 等。"""
+        q: dict[str, Any] = {
+            "symbol": symbol, "interval": interval,
+            "limit": min(int(limit), self.MAX_KLINES_PER_REQUEST),
+        }
+        if end_time is not None:
+            q["endTime"] = int(end_time)
+        data = self._request("GET", "/api/v1/market/klines", query=q)
         klines = data.get("data", {}).get("klines", data.get("data", []))
         return klines or []
+
+    def get_klines_history(self, symbol: str, interval: str = "5M",
+                           total: int = 1000) -> list[dict[str, Any]]:
+        """抓取大量歷史 K 線：自動分頁（用 endTime 往前翻），回傳由舊到新、最多 total 根。"""
+        total = max(1, int(total))
+        if total <= self.MAX_KLINES_PER_REQUEST:
+            return self.get_klines(symbol, interval, total)
+
+        collected: dict[int, dict[str, Any]] = {}
+        end_time: Optional[int] = None
+        for _ in range(40):  # 上限 40 頁 = 2 萬根，防呆
+            page = self.get_klines(symbol, interval,
+                                   self.MAX_KLINES_PER_REQUEST, end_time=end_time)
+            if not page:
+                break
+            times = [t for t in (self._kline_time(k) for k in page) if t is not None]
+            if not times:
+                break
+            for k in page:
+                t = self._kline_time(k)
+                if t is not None:
+                    collected[t] = k
+            new_end = min(times) - 1
+            if end_time is not None and new_end >= end_time:
+                break  # 沒有更舊的資料了
+            end_time = new_end
+            if len(collected) >= total:
+                break
+        ordered = [collected[t] for t in sorted(collected)]
+        return ordered[-total:]
 
     def get_ticker_price(self, symbol: str) -> float:
         """取得最新成交價（用 24h ticker 的 close）。"""
