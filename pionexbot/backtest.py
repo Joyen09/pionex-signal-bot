@@ -85,12 +85,15 @@ class BacktestResult:
 class Backtester:
     def __init__(self, strategy: Strategy, *, start_cash: float = 1000.0,
                  quote_per_trade: float = 100.0, fee_rate: float = 0.0005,
-                 max_position_base: Optional[float] = None):
+                 max_position_base: Optional[float] = None,
+                 stop_loss_pct: float = 0.0, take_profit_pct: float = 0.0):
         self.strategy = strategy
         self.start_cash = start_cash
         self.quote_per_trade = quote_per_trade
         self.fee_rate = fee_rate
         self.max_position_base = max_position_base
+        self.stop_loss_pct = stop_loss_pct
+        self.take_profit_pct = take_profit_pct
 
     def run(self, klines: list[dict[str, Any]], symbol: str) -> BacktestResult:
         closes = Strategy.closes(klines)
@@ -104,40 +107,46 @@ class Backtester:
         peak = self.start_cash
         max_dd = 0.0
 
-        for i in range(2, n):
-            window = klines[: i + 1]
-            price = closes[i]
-            signal = self.strategy.evaluate(window, symbol)
+        def close_position(price: float, reason: str) -> None:
+            nonlocal cash, base, avg_cost, open_trade
+            proceeds = base * price * (1 - self.fee_rate)
+            realized = (price - avg_cost) * base
+            cash += proceeds
+            if open_trade is not None:
+                open_trade.exit_price = price
+                open_trade.exit_quote = proceeds
+                open_trade.pnl = realized
+                open_trade.reason_out = reason
+            base = 0.0
+            avg_cost = 0.0
+            open_trade = None
 
+        for i in range(2, n):
+            price = closes[i]
+
+            # 1) 持倉時先檢查停損 / 停利（模擬 live 每輪檢查）
+            if base > 0 and avg_cost > 0 and (self.stop_loss_pct or self.take_profit_pct):
+                change = (price - avg_cost) / avg_cost
+                if self.take_profit_pct and change >= self.take_profit_pct:
+                    close_position(price, f"停利 +{change * 100:.1f}%")
+                elif self.stop_loss_pct and change <= -self.stop_loss_pct:
+                    close_position(price, f"停損 {change * 100:.1f}%")
+
+            # 2) 策略訊號（單一部位：空手才買、有倉才賣，與 live 一致）
+            signal = self.strategy.evaluate(klines[: i + 1], symbol)
             if signal is not None:
-                if signal.action == Action.BUY and cash >= self.quote_per_trade:
-                    can_buy = True
-                    if self.max_position_base is not None and base >= self.max_position_base:
-                        can_buy = False
-                    if can_buy:
-                        spend = min(self.quote_per_trade, cash)
-                        fee = spend * self.fee_rate
-                        bought = (spend - fee) / price
-                        total_cost = avg_cost * base + spend
-                        base += bought
-                        avg_cost = total_cost / base if base else 0.0
-                        cash -= spend
-                        open_trade = Trade(entry_price=price, entry_quote=spend,
-                                           base=bought, reason_in=signal.reason)
-                        trades.append(open_trade)
+                if signal.action == Action.BUY and base == 0 and cash >= self.quote_per_trade:
+                    spend = min(self.quote_per_trade, cash)
+                    fee = spend * self.fee_rate
+                    bought = (spend - fee) / price
+                    base = bought
+                    avg_cost = spend / bought if bought else 0.0
+                    cash -= spend
+                    open_trade = Trade(entry_price=price, entry_quote=spend,
+                                       base=bought, reason_in=signal.reason)
+                    trades.append(open_trade)
                 elif signal.action in (Action.SELL, Action.CLOSE) and base > 0:
-                    gross = base * price
-                    proceeds = gross * (1 - self.fee_rate)
-                    realized = (price - avg_cost) * base
-                    cash += proceeds
-                    if open_trade is not None:
-                        open_trade.exit_price = price
-                        open_trade.exit_quote = proceeds
-                        open_trade.pnl = realized
-                        open_trade.reason_out = signal.reason
-                    base = 0.0
-                    avg_cost = 0.0
-                    open_trade = None
+                    close_position(price, signal.reason)
 
             equity = cash + base * price
             equity_curve.append(equity)
@@ -161,3 +170,38 @@ def run_backtest(strategy_name: str, params: dict, klines: list[dict[str, Any]],
                  symbol: str, **kwargs) -> BacktestResult:
     strategy = build_strategy(strategy_name, params)
     return Backtester(strategy, **kwargs).run(klines, symbol)
+
+
+# 停損 / 停利掃描用的預設網格（0 = 不啟用）
+DEFAULT_SL_GRID = [0.0, 0.02, 0.03, 0.05, 0.08]
+DEFAULT_TP_GRID = [0.0, 0.04, 0.06, 0.10, 0.15]
+
+
+@dataclass
+class SweepRow:
+    stop_loss: float
+    take_profit: float
+    result: BacktestResult
+
+    @property
+    def score(self) -> float:
+        """風險調整分數 = 報酬 / 最大回撤（回撤越小、報酬越高越好）。"""
+        return self.result.total_return / max(self.result.max_drawdown, 0.01)
+
+
+def sweep_stop_params(strategy_name: str, params: dict,
+                      klines: list[dict[str, Any]], symbol: str,
+                      sl_grid: Optional[list[float]] = None,
+                      tp_grid: Optional[list[float]] = None,
+                      **kwargs) -> list[SweepRow]:
+    """對 (停損, 停利) 網格逐一回測，回傳所有結果。"""
+    sl_grid = sl_grid if sl_grid is not None else DEFAULT_SL_GRID
+    tp_grid = tp_grid if tp_grid is not None else DEFAULT_TP_GRID
+    rows: list[SweepRow] = []
+    for sl in sl_grid:
+        for tp in tp_grid:
+            strategy = build_strategy(strategy_name, params)
+            r = Backtester(strategy, stop_loss_pct=sl, take_profit_pct=tp,
+                           **kwargs).run(klines, symbol)
+            rows.append(SweepRow(sl, tp, r))
+    return rows

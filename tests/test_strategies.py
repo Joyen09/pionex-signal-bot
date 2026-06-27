@@ -108,6 +108,28 @@ def test_take_profit_closes_position():
     assert store.load_position().base == 0            # 已平倉
 
 
+def test_sweep_runs_grid():
+    from pionexbot.backtest import sweep_stop_params
+    closes = [100 * (1 + 0.002 * math.sin(i / 9)) for i in range(400)]
+    kl = [{"close": c, "time": i} for i, c in enumerate(closes)]
+    rows = sweep_stop_params("ma_cross", {"fast": 5, "slow": 20}, kl, "X",
+                             sl_grid=[0.0, 0.03], tp_grid=[0.0, 0.06],
+                             start_cash=1000, quote_per_trade=200)
+    assert len(rows) == 4                       # 2x2 網格
+    assert all(math.isfinite(r.result.total_return) for r in rows)
+    assert all(math.isfinite(r.score) for r in rows)
+
+
+def test_backtest_take_profit_caps_winner():
+    # 一路上漲：有停利會比無停利「提早出場」，部位行為不同但都不該報錯
+    from pionexbot.backtest import Backtester
+    closes = [100, 100, 101, 103, 106, 110, 115, 121, 128, 136]
+    kl = [{"close": c} for c in closes]
+    s1 = build_strategy("ma_cross", {"fast": 2, "slow": 4})
+    r = Backtester(s1, take_profit_pct=0.05).run(kl, "X")
+    assert math.isfinite(r.total_return)
+
+
 def test_candle_time_extraction():
     from pionexbot.sources.strategy_runner import StrategyRunner
     assert StrategyRunner._candle_time({"time": 123, "close": 1}) == 123

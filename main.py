@@ -11,6 +11,7 @@
     python main.py buy  --quote 20 # 手動下一筆市價買單
     python main.py sell --base 0.001  # 手動市價賣出
     python main.py backtest        # 用歷史 K 線回測策略
+    python main.py backtest-sweep  # 掃描停損/停利組合，推薦最佳參數
 
 回測參數：
     --strategy ma_cross   指定策略（預設讀 config）
@@ -160,6 +161,61 @@ def cmd_backtest(bot: Bot, args) -> int:
     return 0
 
 
+def cmd_backtest_sweep(bot: Bot, args) -> int:
+    from pionexbot.backtest import sweep_stop_params
+
+    cfg = bot.cfg
+    scfg = cfg.strategy
+    name = args.strategy or scfg.get("name", "ma_cross")
+    interval = args.interval or scfg.get("interval", "5M")
+    limit = args.limit or 1000
+
+    print(f"抓取 {cfg.symbol} {interval} 共 {limit} 根 K 線，掃描停損/停利組合 ...")
+    try:
+        klines = bot.client.get_klines(cfg.symbol, interval, limit=limit)
+    except PionexError as exc:
+        print(f"❌ 抓 K 線失敗：{exc}")
+        return 1
+    if len(klines) < 50:
+        print(f"❌ K 線太少（{len(klines)}），無法回測")
+        return 1
+
+    rows = sweep_stop_params(
+        name, scfg.get("params", {}), klines, cfg.symbol,
+        start_cash=args.cash or 1000.0,
+        quote_per_trade=float(cfg.trading.get("quote_per_trade", 100)),
+    )
+
+    # 依報酬排序印表
+    by_return = sorted(rows, key=lambda r: r.result.total_return, reverse=True)
+    print(f"\n策略={name}  K線={len(klines)}  "
+          f"買入持有報酬={by_return[0].result.buy_hold_return * 100:+.2f}%")
+    print("\n停損   停利   報酬      回撤    交易  勝率")
+    print("─" * 48)
+    for r in by_return:
+        sl = f"{r.stop_loss*100:.0f}%" if r.stop_loss else "—"
+        tp = f"{r.take_profit*100:.0f}%" if r.take_profit else "—"
+        res = r.result
+        print(f"{sl:>4}  {tp:>4}  {res.total_return*100:+7.2f}%  "
+              f"{res.max_drawdown*100:5.1f}%  {len(res.closed_trades):4}  "
+              f"{res.win_rate*100:4.0f}%")
+
+    best_return = by_return[0]
+    best_risk = max(rows, key=lambda r: r.score)
+    print("\n🏆 報酬最高：停損 {} / 停利 {} → 報酬 {:+.2f}%、回撤 {:.1f}%".format(
+        f"{best_return.stop_loss*100:.0f}%" if best_return.stop_loss else "關閉",
+        f"{best_return.take_profit*100:.0f}%" if best_return.take_profit else "關閉",
+        best_return.result.total_return * 100, best_return.result.max_drawdown * 100))
+    print("⚖️  風險調整最佳（報酬/回撤）：停損 {} / 停利 {} → 報酬 {:+.2f}%、回撤 {:.1f}%".format(
+        f"{best_risk.stop_loss*100:.0f}%" if best_risk.stop_loss else "關閉",
+        f"{best_risk.take_profit*100:.0f}%" if best_risk.take_profit else "關閉",
+        best_risk.result.total_return * 100, best_risk.result.max_drawdown * 100))
+    print("\n建議把 config.yaml 的 risk 改成（風險調整最佳那組）：")
+    print(f"  stop_loss_pct: {best_risk.stop_loss}")
+    print(f"  take_profit_pct: {best_risk.take_profit}")
+    return 0
+
+
 def cmd_notify_test(bot: Bot) -> int:
     n = bot.notifier
     print(f"Telegram 啟用：{n.tg_enabled}　LINE 啟用：{n.line_enabled}")
@@ -185,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("command",
                         choices=["test", "balance", "price", "status",
                                  "run-strategy", "run-webhook", "buy", "sell",
-                                 "backtest", "notify-test"])
+                                 "backtest", "backtest-sweep", "notify-test"])
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--quote", type=float, help="買入金額（報價幣）")
     parser.add_argument("--base", type=float, help="賣出數量（基礎幣）")
@@ -212,6 +268,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_run_webhook(bot)
         if args.command == "backtest":
             return cmd_backtest(bot, args)
+        if args.command == "backtest-sweep":
+            return cmd_backtest_sweep(bot, args)
         if args.command == "notify-test":
             return cmd_notify_test(bot)
         if args.command == "buy":
