@@ -48,9 +48,9 @@ class GridRunner:
         self.summary_hour = int(dcfg.get("utc_hour", 12))
         self._last_summary_day = store.get_meta("grid_summary_day", "") or ""
 
-        # Telegram 指令輪詢用的 offset（記在 store，重啟不重播舊訊息）
-        off = store.get_meta("tg_offset", None)
-        self._tg_offset = int(off) if off is not None else None
+        # Telegram 指令輪詢：用「啟動時間」判斷，只回應啟動後傳來的訊息
+        self._tg_offset = None
+        self._start_ts = time.time()
 
     # ----- 網格計算 -----
     def _levels(self, lower: float, upper: float) -> list[float]:
@@ -123,22 +123,19 @@ class GridRunner:
         if not self.notifier.tg_enabled:
             return
         updates = self.notifier.get_updates(offset=self._tg_offset)
-        if not updates:
-            return
-        first_run = self._tg_offset is None
         for u in updates:
             self._tg_offset = int(u["update_id"]) + 1
-            if first_run:
-                continue  # 首次啟動只記位置，不回應啟動前的舊訊息
             msg = u.get("message") or u.get("channel_post") or {}
-            chat = str((msg.get("chat") or {}).get("id", ""))
             if not msg.get("text"):
                 continue
+            # 略過機器人啟動之前傳的舊訊息
+            if float(msg.get("date", 0)) < self._start_ts:
+                continue
             # 只回應設定的 chat_id（避免陌生人查你的部位）
+            chat = str((msg.get("chat") or {}).get("id", ""))
             if self.notifier.tg_chat and chat != str(self.notifier.tg_chat):
                 continue
             self.notifier.send(self.status_text(), important=True)
-        self.store.set_meta("tg_offset", self._tg_offset)
 
     def _maybe_daily_summary(self) -> None:
         if not self.summary_enabled:
