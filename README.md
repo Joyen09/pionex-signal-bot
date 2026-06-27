@@ -147,6 +147,36 @@ docker compose logs -f             # 看即時日誌
    ```
    `action` 接受 `BUY/LONG/ENTRY` 與 `SELL/EXIT/CLOSE/SHORT`。
 
+## 交易通知（LINE / Telegram）
+
+機器人**實際成交**或**發生錯誤**時，可推播通知到你的手機。
+
+> ⚠️ 舊的「LINE Notify」已於 2025/3/31 停用，本專案改用 **LINE Messaging API**。
+
+### LINE 設定步驟
+
+1. 到 [LINE Developers Console](https://developers.line.biz/console/) 用 LINE 帳號登入。
+2. 建立一個 **Provider**（名稱隨意），底下再建立一個 **Messaging API channel**（會同時開一個 LINE 官方帳號）。
+3. 在該 channel：
+   - **Messaging API** 分頁 → 發行 **Channel access token (long-lived)** → 複製 → 填入 `.env` 的 `LINE_CHANNEL_TOKEN`
+   - **Basic settings** 分頁 → 複製 **Your user ID**（`U` 開頭那串）→ 填入 `.env` 的 `LINE_USER_ID`
+4. 用**手機 LINE 掃 Messaging API 分頁的 QR code，把這個官方帳號加為好友**（沒加好友收不到推播）。
+5. `config.yaml` 設 `notify.line.enabled: true`。
+6. 測試：
+   ```bash
+   python main.py notify-test            # 本機
+   docker compose run --rm strategy notify-test   # Docker
+   ```
+   收到測試訊息就成功了。
+
+### Telegram 設定（更簡單、完全免費無上限）
+
+1. 在 LINE… 不是，在 Telegram 找 **@BotFather** → `/newbot` → 取得 **bot token** → 填 `.env` 的 `TELEGRAM_BOT_TOKEN`。
+2. 找 **@userinfobot** 取得你的 **chat id** → 填 `.env` 的 `TELEGRAM_CHAT_ID`。
+3. `config.yaml` 設 `notify.telegram.enabled: true` → `python main.py notify-test`。
+
+> LINE 免費推播有月額度，所以**只推「成交」與「錯誤」**；Telegram 免費無上限，所有訊息都推。兩者可同時啟用。
+
 ## 專案結構
 
 ```

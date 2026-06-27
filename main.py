@@ -156,6 +156,18 @@ def cmd_backtest(bot: Bot, args) -> int:
     return 0
 
 
+def cmd_notify_test(bot: Bot) -> int:
+    n = bot.notifier
+    print(f"Telegram 啟用：{n.tg_enabled}　LINE 啟用：{n.line_enabled}")
+    if not (n.tg_enabled or n.line_enabled):
+        print("⚠ 兩種通知都未啟用。請在 config.yaml 設 enabled: true，並在 .env 填好金鑰。")
+        return 1
+    n.send("🔔 派網訊號機器人通知測試：如果你收到這則訊息，代表通知設定成功！",
+           "info", important=True)
+    print("已送出測試通知，請查看你的 LINE / Telegram。")
+    return 0
+
+
 def cmd_manual(bot: Bot, action: Action, quote: float | None, base: float | None) -> int:
     sig = Signal(action=action, symbol=bot.cfg.symbol, source="manual:cli",
                  quote_amount=quote, base_size=base, reason="手動下單")
@@ -169,7 +181,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("command",
                         choices=["test", "balance", "price", "status",
                                  "run-strategy", "run-webhook", "buy", "sell",
-                                 "backtest"])
+                                 "backtest", "notify-test"])
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--quote", type=float, help="買入金額（報價幣）")
     parser.add_argument("--base", type=float, help="賣出數量（基礎幣）")
@@ -196,6 +208,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_run_webhook(bot)
         if args.command == "backtest":
             return cmd_backtest(bot, args)
+        if args.command == "notify-test":
+            return cmd_notify_test(bot)
         if args.command == "buy":
             return cmd_manual(bot, Action.BUY, args.quote or
                               float(cfg.trading.get("quote_per_trade", 20)), None)

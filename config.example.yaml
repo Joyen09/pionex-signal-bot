@@ -54,6 +54,9 @@ webhook:
 notify:
   telegram:
     enabled: false      # 設 true 並在 .env 填 token/chat_id 後啟用
+  line:
+    enabled: false      # 設 true 並在 .env 填 LINE_CHANNEL_TOKEN/LINE_USER_ID 後啟用
+    # 注意：LINE 只推「實際成交」與「錯誤」通知，避免耗用免費推播額度
 
 logging:
   level: INFO           # DEBUG / INFO / WARNING / ERROR

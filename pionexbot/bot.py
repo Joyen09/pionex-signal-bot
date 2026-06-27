@@ -22,10 +22,14 @@ class Bot:
             base_url=cfg.base_url,
         )
         tg = cfg.notify.get("telegram", {})
+        line = cfg.notify.get("line", {})
         self.notifier = Notifier(
             telegram_token=cfg.secrets.telegram_bot_token,
             telegram_chat_id=cfg.secrets.telegram_chat_id,
-            enabled=bool(tg.get("enabled", False)),
+            telegram_enabled=bool(tg.get("enabled", False)),
+            line_token=cfg.secrets.line_channel_token,
+            line_user_id=cfg.secrets.line_user_id,
+            line_enabled=bool(line.get("enabled", False)),
         )
         self.store = Store("data/bot.db")
         self.risk = RiskManager(cfg.risk)

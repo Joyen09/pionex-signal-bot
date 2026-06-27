@@ -46,7 +46,9 @@ class Executor:
             return result
 
         self._apply_fill(pos, result, signal)
-        self.notifier.send(f"✅ {result} | 觸發：{signal.reason or signal.source}", "info")
+        # important=True → 實際成交會推 LINE/Telegram 通知
+        self.notifier.send(f"✅ {result} | 觸發：{signal.reason or signal.source}",
+                           "info", important=True)
         return result
 
     def _apply_fill(self, pos, result: OrderResult, signal: Signal) -> None:

@@ -23,6 +23,8 @@ class Secrets:
     api_secret: str = ""
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    line_channel_token: str = ""
+    line_user_id: str = ""
     webhook_secret: str = ""
 
     @classmethod
@@ -32,6 +34,8 @@ class Secrets:
             api_secret=os.getenv("PIONEX_API_SECRET", "").strip(),
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
             telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
+            line_channel_token=os.getenv("LINE_CHANNEL_TOKEN", "").strip(),
+            line_user_id=os.getenv("LINE_USER_ID", "").strip(),
             webhook_secret=os.getenv("WEBHOOK_SECRET", "").strip(),
         )
 
