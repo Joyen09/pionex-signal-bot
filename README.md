@@ -118,6 +118,8 @@ docker compose up -d               # 兩者都跑
 docker compose logs -f             # 看即時日誌
 ```
 
+📘 **完整雲端部署教學**：[docs/deploy-gcp.md](docs/deploy-gcp.md)（Google Cloud 永久免費機器，從註冊到上線的中文步驟）
+
 部署到雲端（VPS）建議：
 1. 機器裝好 Docker 與 Docker Compose。
 2. 上傳專案、填好 `.env`（金鑰）與 `config.yaml`。
