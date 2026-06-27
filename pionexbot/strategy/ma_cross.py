@@ -27,6 +27,24 @@ class MaCrossStrategy(Strategy):
         if self.fast >= self.slow:
             raise ValueError(f"fast({self.fast}) 必須小於 slow({self.slow})")
 
+    def generate_signals(self, klines: list[dict[str, Any]]):
+        closes = pd.Series(self.closes(klines))
+        diff = closes.rolling(self.fast).mean() - closes.rolling(self.slow).mean()
+        prev = diff.shift(1)
+        trend = closes.rolling(self.trend_ma).mean() if self.trend_ma else None
+        actions: list[Optional[Action]] = [None] * len(closes)
+        for i in range(len(closes)):
+            p, c = prev.iloc[i], diff.iloc[i]
+            if pd.isna(p) or pd.isna(c):
+                continue
+            if p <= 0 < c:
+                if trend is not None and (pd.isna(trend.iloc[i]) or closes.iloc[i] < trend.iloc[i]):
+                    continue
+                actions[i] = Action.BUY
+            elif p >= 0 > c:
+                actions[i] = Action.CLOSE
+        return actions
+
     def evaluate(self, klines: list[dict[str, Any]], symbol: str) -> Optional[Signal]:
         closes = self.closes(klines)
         need = max(self.slow, self.trend_ma) + 2

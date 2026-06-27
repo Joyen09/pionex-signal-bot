@@ -122,6 +122,9 @@ class Backtester:
             avg_cost = 0.0
             open_trade = None
 
+        # 一次算完整段訊號（向量化），回測迴圈不再每根重算指標
+        actions = self.strategy.generate_signals(klines)
+
         for i in range(2, n):
             price = closes[i]
 
@@ -134,9 +137,9 @@ class Backtester:
                     close_position(price, f"停損 {change * 100:.1f}%")
 
             # 2) 策略訊號（單一部位：空手才買、有倉才賣，與 live 一致）
-            signal = self.strategy.evaluate(klines[: i + 1], symbol)
-            if signal is not None:
-                if signal.action == Action.BUY and base == 0 and cash >= self.quote_per_trade:
+            action = actions[i] if i < len(actions) else None
+            if action is not None:
+                if action == Action.BUY and base == 0 and cash >= self.quote_per_trade:
                     spend = min(self.quote_per_trade, cash)
                     fee = spend * self.fee_rate
                     bought = (spend - fee) / price
@@ -144,10 +147,10 @@ class Backtester:
                     avg_cost = spend / bought if bought else 0.0
                     cash -= spend
                     open_trade = Trade(entry_price=price, entry_quote=spend,
-                                       base=bought, reason_in=signal.reason)
+                                       base=bought, reason_in="策略進場")
                     trades.append(open_trade)
-                elif signal.action in (Action.SELL, Action.CLOSE) and base > 0:
-                    close_position(price, signal.reason)
+                elif action in (Action.SELL, Action.CLOSE) and base > 0:
+                    close_position(price, "策略出場")
 
             equity = cash + base * price
             equity_curve.append(equity)

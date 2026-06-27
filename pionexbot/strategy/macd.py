@@ -23,6 +23,23 @@ class MacdStrategy(Strategy):
         self.slow = int(params.get("slow", 26))
         self.signal = int(params.get("signal", 9))
 
+    def generate_signals(self, klines: list[dict[str, Any]]):
+        closes = pd.Series(self.closes(klines))
+        macd_line, signal_line, _ = indicators.macd(
+            closes, self.fast, self.slow, self.signal)
+        diff = macd_line - signal_line
+        prev = diff.shift(1)
+        actions: list[Optional[Action]] = [None] * len(closes)
+        for i in range(len(closes)):
+            p, c = prev.iloc[i], diff.iloc[i]
+            if pd.isna(p) or pd.isna(c):
+                continue
+            if p <= 0 < c:
+                actions[i] = Action.BUY
+            elif p >= 0 > c:
+                actions[i] = Action.CLOSE
+        return actions
+
     def evaluate(self, klines: list[dict[str, Any]], symbol: str) -> Optional[Signal]:
         closes = self.closes(klines)
         if len(closes) < self.slow + self.signal + 2:

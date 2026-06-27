@@ -23,6 +23,21 @@ class BollingerStrategy(Strategy):
         self.period = int(params.get("period", 20))
         self.num_std = float(params.get("num_std", 2.0))
 
+    def generate_signals(self, klines: list[dict[str, Any]]):
+        closes = pd.Series(self.closes(klines))
+        _, upper, lower = indicators.bollinger(closes, self.period, self.num_std)
+        prev_c = closes.shift(1)
+        prev_l, prev_u = lower.shift(1), upper.shift(1)
+        actions: list[Optional[Action]] = [None] * len(closes)
+        for i in range(len(closes)):
+            if pd.isna(lower.iloc[i]) or pd.isna(upper.iloc[i]) or pd.isna(prev_c.iloc[i]):
+                continue
+            if prev_c.iloc[i] >= prev_l.iloc[i] and closes.iloc[i] < lower.iloc[i]:
+                actions[i] = Action.BUY
+            elif prev_c.iloc[i] <= prev_u.iloc[i] and closes.iloc[i] > upper.iloc[i]:
+                actions[i] = Action.CLOSE
+        return actions
+
     def evaluate(self, klines: list[dict[str, Any]], symbol: str) -> Optional[Signal]:
         closes = self.closes(klines)
         if len(closes) < self.period + 2:

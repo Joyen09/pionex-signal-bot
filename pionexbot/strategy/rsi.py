@@ -24,6 +24,21 @@ class RsiStrategy(Strategy):
         self.oversold = float(params.get("oversold", 30))
         self.overbought = float(params.get("overbought", 70))
 
+    def generate_signals(self, klines: list[dict[str, Any]]):
+        closes = pd.Series(self.closes(klines))
+        r = indicators.rsi(closes, self.period)
+        prev = r.shift(1)
+        actions: list[Optional[Action]] = [None] * len(closes)
+        for i in range(len(closes)):
+            p, c = prev.iloc[i], r.iloc[i]
+            if pd.isna(p) or pd.isna(c):
+                continue
+            if p <= self.oversold < c:
+                actions[i] = Action.BUY
+            elif p >= self.overbought > c:
+                actions[i] = Action.CLOSE
+        return actions
+
     def evaluate(self, klines: list[dict[str, Any]], symbol: str) -> Optional[Signal]:
         closes = self.closes(klines)
         if len(closes) < self.period + 2:
