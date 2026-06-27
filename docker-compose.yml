@@ -23,6 +23,18 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
 
+  grid:
+    build: .
+    image: pionex-signal-bot
+    container_name: pionex-grid
+    restart: unless-stopped
+    env_file: .env
+    command: ["run-grid"]
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data
+      - ./logs:/app/logs
+
   webhook:
     build: .
     image: pionex-signal-bot

@@ -46,9 +46,13 @@ class Notifier:
         self.line_enabled = line_enabled and bool(line_token and line_user_id)
         self._last_line_msg: Optional[str] = None  # 簡單去重，避免重複錯誤洗版
 
-    def send(self, message: str, level: str = "info", important: bool = False) -> None:
-        """important=True 或 level=='error' 才會推 LINE；Telegram 一律推。"""
+    def send(self, message: str, level: str = "info", important: bool = False,
+             push: bool = True) -> None:
+        """一律寫 log。push=False 則只記錄、不外推（給頻繁的網格成交用）。
+        push=True 時：Telegram 一律推；LINE 僅在 important 或 error 時推。"""
         getattr(logger, level, logger.info)(message)
+        if not push:
+            return
         if self.tg_enabled:
             self._send_telegram(message)
         if self.line_enabled and (important or level == "error"):

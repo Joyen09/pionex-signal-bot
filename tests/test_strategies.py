@@ -178,6 +178,39 @@ def test_grid_bags_in_downtrend():
     assert r.total_return < 0
 
 
+def test_grid_runner_harvest_and_auto_reset():
+    from pionexbot.config import Config
+    from pionexbot.store import Store
+    from pionexbot.broker import PaperBroker
+    from pionexbot.notifier import Notifier
+    from pionexbot.sources.grid_runner import GridRunner
+
+    raw = {"trading": {"symbol": "BTC_USDT"},
+           "grid": {"auto_range": True, "range_pct": 0.15, "grids": 10,
+                    "quote_per_grid": 5, "breakout_buffer": 0.02,
+                    "reset_on_breakout": True}}
+    cfg = Config(mode="paper", raw=raw)
+    store = Store(":memory:")
+    broker = PaperBroker(client=None)
+    runner = GridRunner(cfg, None, broker, store, Notifier())
+
+    def setp(p):
+        broker._last_price_cache["BTC_USDT"] = p
+
+    setp(60000); runner.run_once()                      # 建立網格
+    st = store.load_grid_state()
+    assert st and st["active"]
+    base_lower = st["lower"]
+
+    for p in [56000, 54000, 58000, 62000, 64000]:       # 震盪
+        setp(p); runner.run_once()
+    assert store.load_grid_state()["realized"] >= 0     # 應有(或不虧)實現利潤
+
+    setp(40000); runner.run_once()                      # 崩跌穿底 → 關閉重開
+    st2 = store.load_grid_state()
+    assert st2["active"] and st2["lower"] < base_lower   # 已在更低價重開新網格
+
+
 def test_grid_rejects_bad_range():
     from pionexbot.grid import GridBacktester
     try:

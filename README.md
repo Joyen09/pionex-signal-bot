@@ -151,6 +151,23 @@ docker compose logs -f             # 看即時日誌
 2. `mode: paper` 跑 `run-strategy` 觀察幾天，看 `python main.py status` 的模擬損益。
 3. 確認策略與風控符合預期後，**才**把 `config.yaml` 改成 `mode: live`，並先用很小的 `quote_per_trade` 實測。
 
+## 自動網格機器人
+
+在現價附近建立網格、機械式低買高賣，**風險過高（跌破區間）會自動平倉關閉、再以新價位開新網格**繼續交易，全自動。
+
+```bash
+python main.py run-grid
+# 或 Docker：
+docker compose up -d grid
+```
+
+設定在 `config.yaml` 的 `grid` 區塊（`auto_range`、`range_pct`、`grids`、`quote_per_grid`、`reset_on_breakout`、`max_loss_quote`…）。
+
+> ⚠️ 重要：
+> - `grids × quote_per_grid` 要 **≤ 你的帳戶餘額**。
+> - 網格賺的是**震盪**；單邊大跌會在重開前先實現一次虧損（自動停損重開＝控制單次套牢，但下跌行情仍可能連續小虧）。
+> - **真錢做網格，建議優先用派網 App 內建網格機器人**（限價單手續費低、伺服器代管），自製版用市價單成本較高，較適合學習/客製。
+
 ## 接 TradingView
 
 1. 啟動 `python main.py run-webhook`，並讓這台機器有公開網址（可用 ngrok、Cloudflare Tunnel 或部署到雲端）。

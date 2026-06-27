@@ -1,6 +1,7 @@
 """以 SQLite 記錄交易與機器人狀態（持倉、當日已實現損益）。"""
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -92,6 +93,13 @@ class Store:
         return self.conn.execute(
             "SELECT * FROM trades ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
+
+    def save_grid_state(self, state: dict) -> None:
+        self._set("grid_state", json.dumps(state))
+
+    def load_grid_state(self) -> Optional[dict]:
+        raw = self._get("grid_state", "")
+        return json.loads(raw) if raw else None
 
     def stats_since(self, ts: float) -> tuple[int, float]:
         """回傳自 ts(秒) 以來的 (成交筆數, 已實現損益總和)。"""

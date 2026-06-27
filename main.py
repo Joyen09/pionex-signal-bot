@@ -6,6 +6,7 @@
     python main.py balance         # 查詢帳戶餘額（需 API 金鑰）
     python main.py price           # 查目前市價
     python main.py run-strategy    # 啟動內建策略機器人（輪詢 K 線）
+    python main.py run-grid        # 啟動自動網格機器人（風險過高自動關閉重開）
     python main.py run-webhook     # 啟動 Webhook 伺服器（接 TradingView 等）
     python main.py status          # 顯示目前持倉與最近交易
     python main.py buy  --quote 20 # 手動下一筆市價買單
@@ -115,6 +116,20 @@ def cmd_run_strategy(bot: Bot) -> int:
         bot.notifier.send("🛑 策略機器人已手動停止。", "info", important=True)
     except Exception as exc:  # noqa: BLE001 - 意外崩潰也要通知
         bot.notifier.send(f"💥 策略機器人異常結束：{exc}", "error")
+        raise
+    return 0
+
+
+def cmd_run_grid(bot: Bot) -> int:
+    from pionexbot.sources.grid_runner import GridRunner
+    runner = GridRunner(bot.cfg, bot.client, bot.broker, bot.store, bot.notifier)
+    try:
+        runner.run_forever()
+    except KeyboardInterrupt:
+        print("\n已停止。")
+        bot.notifier.send("🛑 網格機器人已手動停止。", "info", important=True)
+    except Exception as exc:  # noqa: BLE001
+        bot.notifier.send(f"💥 網格機器人異常結束：{exc}", "error")
         raise
     return 0
 
@@ -328,7 +343,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="派網訊號機器人")
     parser.add_argument("command",
                         choices=["test", "balance", "price", "status",
-                                 "run-strategy", "run-webhook", "buy", "sell",
+                                 "run-strategy", "run-grid", "run-webhook", "buy", "sell",
                                  "backtest", "backtest-sweep", "optimize",
                                  "grid-backtest", "notify-test"])
     parser.add_argument("--config", default="config.yaml")
@@ -356,6 +371,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_status(bot)
         if args.command == "run-strategy":
             return cmd_run_strategy(bot)
+        if args.command == "run-grid":
+            return cmd_run_grid(bot)
         if args.command == "run-webhook":
             return cmd_run_webhook(bot)
         if args.command == "backtest":

@@ -50,6 +50,19 @@ strategy:
     # period: 20
     # num_std: 2.0
 
+grid:                   # 自動網格機器人 (python main.py run-grid)
+  auto_range: true      # true = 自動以「現價 ±range_pct」當區間
+  range_pct: 0.15       # 自動區間幅度（0.15 = 現價上下各 15%）
+  grids: 10             # 網格數量
+  quote_per_grid: 5     # 每格買入金額（USDT）。注意：grids × quote_per_grid 要 ≤ 你的餘額
+  poll_seconds: 20      # 多久檢查一次價格
+  breakout_buffer: 0.02 # 超出區間多少比例才算突破（避免邊緣抖動誤判）
+  reset_on_breakout: true   # 突破/跌破區間時自動關閉並重開新網格
+  max_loss_quote: 0     # 未實現虧損達此金額(USDT)就關閉重開；0 = 只靠區間判斷
+  # auto_range: false 時改用固定區間：
+  # lower: 50000
+  # upper: 70000
+
 webhook:
   host: 0.0.0.0
   port: 8080
