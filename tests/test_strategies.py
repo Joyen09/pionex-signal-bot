@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from pionexbot.backtest import Backtester  # noqa: E402
-from pionexbot.models import Action  # noqa: E402
+from pionexbot.models import Action, Signal  # noqa: E402
 from pionexbot.strategy import available, build_strategy  # noqa: E402
 
 
@@ -74,6 +74,45 @@ def test_backtest_buy_hold_matches_price_change():
     r = Backtester(s).run(_klines(closes), "X")
     # 買入持有以第 index 2 根為基準
     assert abs(r.buy_hold_return - (150 - 110) / 110) < 1e-9
+
+
+def test_take_profit_closes_position():
+    from pionexbot.config import Config
+    from pionexbot.store import Store
+    from pionexbot.risk import RiskManager
+    from pionexbot.broker import PaperBroker
+    from pionexbot.executor import Executor
+    from pionexbot.notifier import Notifier
+    from pionexbot.sources.strategy_runner import StrategyRunner
+
+    raw = {
+        "trading": {"symbol": "BTC_USDT", "quote_per_trade": 20},
+        "risk": {"cooldown_seconds": 0, "max_quote_per_trade": 100,
+                 "max_position_base": 1, "take_profit_pct": 0.06, "stop_loss_pct": 0.03},
+        "strategy": {"name": "ma_cross", "params": {"fast": 3, "slow": 5}},
+    }
+    cfg = Config(mode="paper", raw=raw)
+    store = Store(":memory:")
+    broker = PaperBroker(client=None)
+    broker._last_price_cache["BTC_USDT"] = 60000.0
+    notifier = Notifier()
+    execu = Executor(broker, RiskManager(raw["risk"]), store, notifier)
+    runner = StrategyRunner(cfg, None, execu, notifier)
+
+    execu.handle(Signal(Action.BUY, "BTC_USDT", quote_amount=20))
+    assert store.load_position().base > 0
+    pos = store.load_position(); pos.last_trade_ts = 0; store.save_position(pos)
+
+    broker._last_price_cache["BTC_USDT"] = 64200.0   # +7% > 停利 6%
+    runner._check_exit()
+    assert store.load_position().base == 0            # 已平倉
+
+
+def test_candle_time_extraction():
+    from pionexbot.sources.strategy_runner import StrategyRunner
+    assert StrategyRunner._candle_time({"time": 123, "close": 1}) == 123
+    assert StrategyRunner._candle_time([999, 1, 2, 3, 4, 5]) == 999
+    assert StrategyRunner._candle_time({"close": 1}) is None
 
 
 if __name__ == "__main__":

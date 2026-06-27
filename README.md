@@ -72,6 +72,15 @@ python main.py backtest --strategy macd --interval 1H --limit 1000
 python main.py backtest --strategy rsi --cash 1000
 ```
 
+## 部位管理與進出場規則
+
+- **單一部位、進出成對**：空手才買、有倉才賣，不會在持倉時一直加碼。
+- **只用已收盤 K 線評估**，且每根 K 線只評估一次 → 訊號不會因為「形成中的 K 線」反覆跳動而重複下單。
+- **停損 / 停利**（`config.yaml` 的 `risk` 區塊）：
+  - `stop_loss_pct: 0.03` → 虧損達 3% 自動平倉
+  - `take_profit_pct: 0.06` → 獲利達 6% 自動平倉
+  - 設 `0` 即關閉。機器人每輪都會用現價檢查，達標立即平倉並通知。
+
 ## 內建策略
 
 | 名稱 | 邏輯 | 主要參數（`config.yaml` 的 `strategy.params`） |

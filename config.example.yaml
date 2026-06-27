@@ -23,6 +23,8 @@ risk:
   daily_loss_limit_quote: 50   # 當日已實現虧損達此值（USDT）即停止交易
   cooldown_seconds: 60         # 兩筆交易最短間隔，避免訊號連發
   allow_short: false           # 現貨不可做空；保留給未來合約
+  stop_loss_pct: 0.03          # 停損：虧損達 3% 自動平倉（0 = 關閉）
+  take_profit_pct: 0.06        # 停利：獲利達 6% 自動平倉（0 = 關閉）
 
 strategy:
   # 可用策略：ma_cross / rsi / macd / bollinger
