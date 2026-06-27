@@ -121,6 +121,19 @@ class PionexClient:
     # ------------------------------------------------------------------ #
     MAX_KLINES_PER_REQUEST = 500   # 派網單次上限
 
+    # 派網有效週期：1M 5M 15M 30M 60M 4H 8H 12H 1D 1W 1MON
+    # 常見別名 → 派網代號（避免使用者寫 1H 等被拒）
+    _INTERVAL_ALIASES = {
+        "1H": "60M", "1HOUR": "60M", "H1": "60M",
+        "1MIN": "1M", "5MIN": "5M", "15MIN": "15M", "30MIN": "30M", "60MIN": "60M",
+        "4HOUR": "4H", "1DAY": "1D", "D1": "1D", "1WEEK": "1W",
+    }
+
+    @classmethod
+    def _norm_interval(cls, interval: str) -> str:
+        up = str(interval).strip().upper()
+        return cls._INTERVAL_ALIASES.get(up, up)
+
     @staticmethod
     def _kline_time(k: Any) -> Optional[int]:
         if isinstance(k, dict):
@@ -135,7 +148,7 @@ class PionexClient:
                    limit: int = 100, end_time: Optional[int] = None) -> list[dict[str, Any]]:
         """取得 K 線（單次，limit 上限 500）。回傳 list，每筆含 close/time 等。"""
         q: dict[str, Any] = {
-            "symbol": symbol, "interval": interval,
+            "symbol": symbol, "interval": self._norm_interval(interval),
             "limit": min(int(limit), self.MAX_KLINES_PER_REQUEST),
         }
         if end_time is not None:
