@@ -130,6 +130,28 @@ def test_backtest_take_profit_caps_winner():
     assert math.isfinite(r.total_return)
 
 
+def test_trend_filter_blocks_buys_in_downtrend():
+    s = build_strategy("ma_cross", {"fast": 3, "slow": 5, "trend_ma": 10})
+    down = [100 - i for i in range(20)]
+    fired = [s.evaluate(_klines(down[:i]), "X") for i in range(12, 21)]
+    buys = [x for x in fired if x and x.action == Action.BUY]
+    assert len(buys) == 0
+
+
+def test_walk_forward_runs():
+    from pionexbot.backtest import walk_forward, grid_search
+    closes = [100 * (1 + 0.001 * math.sin(i / 40) + 0.0002) for i in range(1200)]
+    kl = [{"close": c, "time": i} for i, c in enumerate(closes)]
+    gs = grid_search("ma_cross", kl, "X", start_cash=1000, quote_per_trade=1000)
+    assert len(gs) > 0
+    wf = walk_forward("ma_cross", kl, "X", folds=3,
+                      start_cash=1000, quote_per_trade=1000)
+    assert len(wf) == 3
+    for f in wf:
+        assert math.isfinite(f.test_return)
+        assert "slow" in f.params
+
+
 def test_candle_time_extraction():
     from pionexbot.sources.strategy_runner import StrategyRunner
     assert StrategyRunner._candle_time({"time": 123, "close": 1}) == 123

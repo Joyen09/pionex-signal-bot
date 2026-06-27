@@ -22,12 +22,15 @@ class MaCrossStrategy(Strategy):
         super().__init__(params)
         self.fast = int(params.get("fast", 9))
         self.slow = int(params.get("slow", 21))
+        # 趨勢過濾：只在收盤價站上這條長均線時才做多（0 = 關閉）
+        self.trend_ma = int(params.get("trend_ma", 0))
         if self.fast >= self.slow:
             raise ValueError(f"fast({self.fast}) 必須小於 slow({self.slow})")
 
     def evaluate(self, klines: list[dict[str, Any]], symbol: str) -> Optional[Signal]:
         closes = self.closes(klines)
-        if len(closes) < self.slow + 2:
+        need = max(self.slow, self.trend_ma) + 2
+        if len(closes) < need:
             return None  # 資料不足
 
         s = pd.Series(closes)
@@ -42,10 +45,16 @@ class MaCrossStrategy(Strategy):
 
         price = closes[-1]
         if prev_diff <= 0 < curr_diff:
+            # 趨勢過濾：跌破長均線（空頭）就不做多，避免逆勢被巴
+            if self.trend_ma:
+                trend = s.rolling(self.trend_ma).mean().iloc[-1]
+                if pd.isna(trend) or price < trend:
+                    return None
             return Signal(
                 action=Action.BUY, symbol=symbol, source=f"strategy:{self.name}",
                 price=price,
-                reason=f"黃金交叉 MA{self.fast} 上穿 MA{self.slow}",
+                reason=f"黃金交叉 MA{self.fast} 上穿 MA{self.slow}"
+                       + (f"（且站上 MA{self.trend_ma}）" if self.trend_ma else ""),
             )
         if prev_diff >= 0 > curr_diff:
             return Signal(

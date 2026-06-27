@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -187,6 +188,77 @@ class SweepRow:
     def score(self) -> float:
         """風險調整分數 = 報酬 / 最大回撤（回撤越小、報酬越高越好）。"""
         return self.result.total_return / max(self.result.max_drawdown, 0.01)
+
+
+# 各策略要搜尋的參數網格（用於最佳化 / walk-forward）
+STRATEGY_PARAM_GRIDS: dict[str, dict[str, list]] = {
+    "ma_cross": {"fast": [5, 9, 12, 20], "slow": [21, 30, 50, 100],
+                 "trend_ma": [0, 100, 200]},
+    "macd": {"fast": [8, 12], "slow": [21, 26], "signal": [9]},
+    "rsi": {"period": [7, 14, 21], "oversold": [25, 30, 35],
+            "overbought": [65, 70, 75]},
+    "bollinger": {"period": [20, 30], "num_std": [2.0, 2.5, 3.0]},
+}
+
+
+def _param_combos(grid: dict[str, list]):
+    keys = list(grid)
+    for vals in itertools.product(*(grid[k] for k in keys)):
+        yield dict(zip(keys, vals))
+
+
+def grid_search(strategy_name: str, klines: list[dict[str, Any]], symbol: str,
+                grid: Optional[dict[str, list]] = None,
+                **kwargs) -> list[tuple[dict, BacktestResult]]:
+    """對參數網格逐一回測，回傳 [(params, result), ...]（已過濾不合法組合）。"""
+    grid = grid if grid is not None else STRATEGY_PARAM_GRIDS.get(strategy_name, {})
+    out: list[tuple[dict, BacktestResult]] = []
+    for params in _param_combos(grid):
+        try:
+            strat = build_strategy(strategy_name, params)
+        except (ValueError, Exception):  # noqa: BLE001 - 不合法組合（如 fast>=slow）跳過
+            continue
+        out.append((params, Backtester(strat, **kwargs).run(klines, symbol)))
+    return out
+
+
+@dataclass
+class WalkForwardFold:
+    fold: int
+    params: dict
+    train_return: float   # 內測（找參數那段，會偏樂觀）
+    test_return: float    # 實測（沒看過的那段，才算數）
+    test_trades: int
+
+
+def walk_forward(strategy_name: str, klines: list[dict[str, Any]], symbol: str,
+                 folds: int = 4, grid: Optional[dict[str, list]] = None,
+                 **kwargs) -> list[WalkForwardFold]:
+    """前進測試：把資料切成數段，用前段找最佳參數，拿下一段（沒看過）驗收。"""
+    n = len(klines)
+    chunk = n // (folds + 1)
+    if chunk < 50:
+        return []
+    results: list[WalkForwardFold] = []
+    for i in range(folds):
+        train_end = chunk * (i + 1)
+        test_end = n if i == folds - 1 else chunk * (i + 2)
+        train, test = klines[:train_end], klines[train_end:test_end]
+        if len(train) < 60 or len(test) < 30:
+            continue
+        gs = grid_search(strategy_name, train, symbol, grid=grid, **kwargs)
+        if not gs:
+            continue
+        best_params, best_train = max(gs, key=lambda x: x[1].total_return)
+        strat = build_strategy(strategy_name, best_params)
+        test_res = Backtester(strat, **kwargs).run(test, symbol)
+        results.append(WalkForwardFold(
+            fold=i + 1, params=best_params,
+            train_return=best_train.total_return,
+            test_return=test_res.total_return,
+            test_trades=len(test_res.closed_trades),
+        ))
+    return results
 
 
 def sweep_stop_params(strategy_name: str, params: dict,

@@ -37,6 +37,7 @@ strategy:
     # --- ma_cross ---
     fast: 9             # 快線週期
     slow: 21            # 慢線週期
+    trend_ma: 200       # 趨勢過濾：只在站上此長均線(多頭)才做多；0 = 關閉
     # --- rsi（換成 name: rsi 時使用）---
     # period: 14
     # oversold: 30

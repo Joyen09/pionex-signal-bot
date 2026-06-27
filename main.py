@@ -12,6 +12,7 @@
     python main.py sell --base 0.001  # 手動市價賣出
     python main.py backtest        # 用歷史 K 線回測策略
     python main.py backtest-sweep  # 掃描停損/停利組合，推薦最佳參數
+    python main.py optimize        # walk-forward 最佳化（嚴謹驗證是否真有優勢）
 
 回測參數：
     --strategy ma_cross   指定策略（預設讀 config）
@@ -216,6 +217,59 @@ def cmd_backtest_sweep(bot: Bot, args) -> int:
     return 0
 
 
+def cmd_optimize(bot: Bot, args) -> int:
+    from pionexbot.backtest import walk_forward
+
+    cfg = bot.cfg
+    scfg = cfg.strategy
+    name = args.strategy or scfg.get("name", "ma_cross")
+    interval = args.interval or scfg.get("interval", "4H")
+    limit = args.limit or 5000
+
+    print(f"抓取 {cfg.symbol} {interval} 共 {limit} 根 K 線，對 {name} 做 walk-forward 最佳化 ...")
+    try:
+        klines = bot.client.get_klines_history(cfg.symbol, interval, total=limit)
+    except PionexError as exc:
+        print(f"❌ 抓 K 線失敗：{exc}")
+        return 1
+    if len(klines) < 300:
+        print(f"❌ K 線太少（{len(klines)}），無法做 walk-forward")
+        return 1
+
+    # 用「滿倉單一部位」評估，數字才反映策略真實複利績效
+    cash = args.cash or 1000.0
+    folds = walk_forward(name, klines, cfg.symbol, folds=4,
+                         start_cash=cash, quote_per_trade=cash)
+    if not folds:
+        print("❌ 資料不足以切分，請加大 --limit")
+        return 1
+
+    print(f"\n策略={name}　K線={len(klines)}　（每段都『前段找參數→後段沒看過的資料驗收』）")
+    print("\n段  最佳參數                              內測報酬   實測報酬   實測交易")
+    print("─" * 78)
+    compounded = 1.0
+    test_returns = []
+    for f in folds:
+        compounded *= (1 + f.test_return)
+        test_returns.append(f.test_return)
+        ps = ",".join(f"{k}={v}" for k, v in f.params.items())
+        print(f"{f.fold:>2}  {ps:<36}  {f.train_return*100:+7.2f}%  "
+              f"{f.test_return*100:+7.2f}%  {f.test_trades:>6}")
+
+    oos = (compounded - 1) * 100
+    wins = sum(1 for r in test_returns if r > 0)
+    print("─" * 78)
+    print(f"\n📉 實測（out-of-sample）累積報酬：{oos:+.2f}%　"
+          f"（{wins}/{len(test_returns)} 段為正）")
+    print("⚠️  此為含手續費、但『不含滑價』的理想值；實盤每筆再扣約 0.1~0.3% 滑價。")
+
+    if oos > 5 and wins >= len(test_returns) * 0.6:
+        print("\n✅ 在沒看過的資料上多數為正且累積正報酬 → 較可能有真實優勢（仍需扣滑價評估）。")
+    else:
+        print("\n🔴 在沒看過的資料上未能穩定獲利 → 先前的高報酬多為過度擬合，不建議投真錢。")
+    return 0
+
+
 def cmd_notify_test(bot: Bot) -> int:
     n = bot.notifier
     print(f"Telegram 啟用：{n.tg_enabled}　LINE 啟用：{n.line_enabled}")
@@ -241,7 +295,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("command",
                         choices=["test", "balance", "price", "status",
                                  "run-strategy", "run-webhook", "buy", "sell",
-                                 "backtest", "backtest-sweep", "notify-test"])
+                                 "backtest", "backtest-sweep", "optimize",
+                                 "notify-test"])
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--quote", type=float, help="買入金額（報價幣）")
     parser.add_argument("--base", type=float, help="賣出數量（基礎幣）")
@@ -270,6 +325,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_backtest(bot, args)
         if args.command == "backtest-sweep":
             return cmd_backtest_sweep(bot, args)
+        if args.command == "optimize":
+            return cmd_optimize(bot, args)
         if args.command == "notify-test":
             return cmd_notify_test(bot)
         if args.command == "buy":
