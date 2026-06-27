@@ -76,8 +76,8 @@ notify:
     enabled: false      # 設 true 並在 .env 填 LINE_CHANNEL_TOKEN/LINE_USER_ID 後啟用
     # 注意：LINE 只推「實際成交」「啟動」「錯誤」與「每日摘要」，避免耗用免費推播額度
   daily_summary:
-    enabled: true       # 每天推一次損益摘要
-    utc_hour: 1         # 幾點推（UTC 時）。台灣 = UTC+8，所以 1 = 台灣早上 9 點
+    enabled: true       # 每天推一次結算
+    utc_hour: 12        # 幾點推（UTC 時）。台灣 = UTC+8，所以 12 = 台灣晚上 8 點
 
 logging:
   level: INFO           # DEBUG / INFO / WARNING / ERROR

@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import time
-from typing import Optional
+from datetime import datetime, timezone
 
 from ..config import Config
 from ..notifier import Notifier
@@ -41,6 +41,16 @@ class GridRunner:
         self.max_loss_quote = float(g.get("max_loss_quote", 0) or 0) or None
         self.reset_on_breakout = bool(g.get("reset_on_breakout", True))
         self._running = False
+
+        # 每日結算（utc_hour 預設 12 = 台灣晚上 8 點）
+        dcfg = cfg.notify.get("daily_summary", {})
+        self.summary_enabled = bool(dcfg.get("enabled", True))
+        self.summary_hour = int(dcfg.get("utc_hour", 12))
+        self._last_summary_day = store.get_meta("grid_summary_day", "") or ""
+
+        # Telegram 指令輪詢用的 offset（記在 store，重啟不重播舊訊息）
+        off = store.get_meta("tg_offset", None)
+        self._tg_offset = int(off) if off is not None else None
 
     # ----- 網格計算 -----
     def _levels(self, lower: float, upper: float) -> list[float]:
@@ -79,6 +89,69 @@ class GridRunner:
         self.notifier.send(
             f"⚠️ 關閉網格（{reason}）：賣出存貨 {total_qty:.8f} @ {price:.2f}"
             f"｜本輪累積已實現利潤 {realized:+.2f}", "info", important=True)
+
+    # ----- 狀態查詢 / 通知互動 -----
+    def status_text(self) -> str:
+        state = self.store.load_grid_state()
+        if not state or not state.get("active"):
+            return "目前沒有運行中的網格。"
+        lower, upper = state["lower"], state["upper"]
+        levels = self._levels(lower, upper)
+        held = {int(k): v for k, v in state.get("held", {}).items()}
+        try:
+            price = self.broker.get_price(self.symbol)
+        except Exception:  # noqa: BLE001
+            price = 0.0
+        invested = sum(q * levels[i] for i, q in held.items())
+        unreal = sum(q * (price - levels[i]) for i, q in held.items()) if price else 0.0
+        lines = [
+            f"🔲 網格狀態（{self.symbol}）",
+            f"區間 {lower:.0f}~{upper:.0f}，共 {self.grids} 格",
+            f"現價 {price:.2f}",
+            f"持有 {len(held)} 格：",
+        ]
+        for i in sorted(held):
+            lines.append(f"  ・買在 {levels[i]:.0f}（{held[i]:.8f}）")
+        if not held:
+            lines.append("  （目前空手）")
+        lines.append(f"投入成本 {invested:.2f} USDT，未實現 {unreal:+.2f}")
+        lines.append(f"本網格已實現利潤 {state.get('realized', 0.0):+.2f}")
+        return "\n".join(lines)
+
+    def _poll_commands(self) -> None:
+        """讀取 Telegram 訊息：收到任何訊息就回覆網格狀態。"""
+        if not self.notifier.tg_enabled:
+            return
+        updates = self.notifier.get_updates(offset=self._tg_offset)
+        if not updates:
+            return
+        first_run = self._tg_offset is None
+        for u in updates:
+            self._tg_offset = int(u["update_id"]) + 1
+            if first_run:
+                continue  # 首次啟動只記位置，不回應啟動前的舊訊息
+            msg = u.get("message") or u.get("channel_post") or {}
+            chat = str((msg.get("chat") or {}).get("id", ""))
+            if not msg.get("text"):
+                continue
+            # 只回應設定的 chat_id（避免陌生人查你的部位）
+            if self.notifier.tg_chat and chat != str(self.notifier.tg_chat):
+                continue
+            self.notifier.send(self.status_text(), important=True)
+        self.store.set_meta("tg_offset", self._tg_offset)
+
+    def _maybe_daily_summary(self) -> None:
+        if not self.summary_enabled:
+            return
+        now = datetime.now(timezone.utc)
+        if now.hour < self.summary_hour:
+            return
+        today = now.strftime("%Y-%m-%d")
+        if self._last_summary_day == today:
+            return
+        self._last_summary_day = today
+        self.store.set_meta("grid_summary_day", today)
+        self.notifier.send("📊 每日結算\n" + self.status_text(), important=True)
 
     # ----- 主迴圈 -----
     def run_once(self) -> None:
@@ -159,7 +232,9 @@ class GridRunner:
             f"{self.quote_per_grid} USDT（需約 {need:.0f} USDT）", "info", important=True)
         while self._running:
             try:
-                self.run_once()
+                self._poll_commands()       # 回覆 Telegram 查詢
+                self.run_once()             # 網格交易
+                self._maybe_daily_summary() # 每日結算
             except Exception as exc:  # noqa: BLE001
                 self.notifier.send(f"⚠️ 網格迴圈錯誤：{exc}", "error")
             time.sleep(self.poll_seconds)

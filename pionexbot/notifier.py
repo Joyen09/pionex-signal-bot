@@ -58,6 +58,22 @@ class Notifier:
         if self.line_enabled and (important or level == "error"):
             self._send_line(message)
 
+    def get_updates(self, offset: Optional[int] = None, timeout: int = 0) -> list:
+        """讀取 Telegram 新訊息（getUpdates）。回傳 update 物件 list。"""
+        if not self.tg_enabled:
+            return []
+        params: dict = {"timeout": timeout}
+        if offset is not None:
+            params["offset"] = offset
+        try:
+            resp = requests.get(
+                f"https://api.telegram.org/bot{self.tg_token}/getUpdates",
+                params=params, timeout=timeout + 15)
+            return resp.json().get("result", [])
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning("Telegram getUpdates 失敗：%s", exc)
+            return []
+
     def _send_telegram(self, message: str) -> None:
         try:
             requests.post(

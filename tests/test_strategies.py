@@ -211,6 +211,32 @@ def test_grid_runner_harvest_and_auto_reset():
     assert st2["active"] and st2["lower"] < base_lower   # 已在更低價重開新網格
 
 
+def test_grid_status_text_reports_holdings():
+    from pionexbot.config import Config
+    from pionexbot.store import Store
+    from pionexbot.broker import PaperBroker
+    from pionexbot.notifier import Notifier
+    from pionexbot.sources.grid_runner import GridRunner
+
+    raw = {"trading": {"symbol": "BTC_USDT"},
+           "grid": {"auto_range": True, "range_pct": 0.15, "grids": 10,
+                    "quote_per_grid": 5}}
+    cfg = Config(mode="paper", raw=raw)
+    store = Store(":memory:")
+    broker = PaperBroker(client=None)
+    runner = GridRunner(cfg, None, broker, store, Notifier())
+
+    def setp(p):
+        broker._last_price_cache["BTC_USDT"] = p
+
+    assert "沒有運行中" in runner.status_text()   # 尚未建立
+    setp(60000); runner.run_once()
+    setp(57000); runner.run_once()
+    txt = runner.status_text()
+    assert "網格狀態" in txt
+    assert "已實現利潤" in txt
+
+
 def test_grid_rejects_bad_range():
     from pionexbot.grid import GridBacktester
     try:

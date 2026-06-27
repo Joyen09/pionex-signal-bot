@@ -94,6 +94,13 @@ class Store:
             "SELECT * FROM trades ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
 
+    def set_meta(self, key: str, value) -> None:
+        self._set(key, str(value))
+
+    def get_meta(self, key: str, default=None):
+        v = self._get(key, "")
+        return v if v != "" else default
+
     def save_grid_state(self, state: dict) -> None:
         self._set("grid_state", json.dumps(state))
 
