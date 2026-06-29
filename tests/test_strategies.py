@@ -290,6 +290,26 @@ def test_grid_regime_filter_blocks_open_in_trend():
     assert st2 and st2.get("active")
 
 
+def test_dynamic_grid_regime_filter_reduces_drawdown():
+    from pionexbot.grid import compare_grid_variants
+    # 盤整 → 下跌 → 盤整：ADX 過濾應在下跌段暫停，回撤明顯較小
+    closes = []
+    p = 60000.0
+    for i in range(300):
+        p *= (1 + 0.004 * math.sin(i / 5)); closes.append(p)
+    for i in range(250):
+        p *= (1 - 0.004 + 0.002 * math.sin(i / 5)); closes.append(p)
+    for i in range(300):
+        p *= (1 + 0.004 * math.sin(i / 5)); closes.append(p)
+    kl = [{"high": c * 1.003, "low": c * 0.997, "close": c} for c in closes]
+
+    res = compare_grid_variants(kl, "X", grids=20, start_cash=1000)
+    plain = next(r for r in res if "固定" in r.label)
+    smart = next(r for r in res if "ADX" in r.label)
+    assert smart.paused_bars > 0                       # 有暫停
+    assert smart.max_drawdown < plain.max_drawdown     # 回撤更小
+
+
 def test_grid_rejects_bad_range():
     from pionexbot.grid import GridBacktester
     try:

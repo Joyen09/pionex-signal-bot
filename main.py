@@ -319,6 +319,40 @@ def cmd_grid_backtest(bot: Bot, args) -> int:
     return 0
 
 
+def cmd_grid_compare(bot: Bot, args) -> int:
+    from pionexbot.grid import compare_grid_variants
+
+    cfg = bot.cfg
+    interval = args.interval or "4H"
+    limit = args.limit or 3000
+    grids = args.grids or 20
+    cash = args.cash or 1000.0
+
+    print(f"抓取 {cfg.symbol} {interval} 共 {limit} 根 K 線，比較三種網格 ...")
+    try:
+        klines = bot.client.get_klines_history(cfg.symbol, interval, total=limit)
+    except PionexError as exc:
+        print(f"❌ 抓 K 線失敗：{exc}")
+        return 1
+    if len(klines) < 200:
+        print(f"❌ K 線太少（{len(klines)}）")
+        return 1
+
+    results = compare_grid_variants(klines, cfg.symbol, grids=grids, start_cash=cash)
+    bh = results[0].buy_hold_return * 100
+    print(f"\n資料 {len(klines)} 根　起始資金 {cash:.0f}　{grids} 格　"
+          f"買入持有 {bh:+.2f}%")
+    print("\n策略              報酬      最大回撤  完成來回  重開  暫停%")
+    print("─" * 62)
+    for r in results:
+        paused_pct = r.paused_bars / r.bars * 100 if r.bars else 0
+        print(f"{r.label:<16}{r.total_return*100:+7.2f}%  {r.max_drawdown*100:6.1f}%  "
+              f"{r.completed:>7}  {r.resets:>4}  {paused_pct:4.0f}%")
+    print("\n判讀：比較『動態+ADX過濾』vs『陽春固定』的報酬與回撤；"
+          "若前者報酬更高或回撤更小，代表 ATR/ADX 升級有效。")
+    return 0
+
+
 def cmd_notify_test(bot: Bot) -> int:
     n = bot.notifier
     print(f"Telegram 啟用：{n.tg_enabled}　LINE 啟用：{n.line_enabled}")
@@ -345,7 +379,7 @@ def main(argv: list[str] | None = None) -> int:
                         choices=["test", "balance", "price", "status",
                                  "run-strategy", "run-grid", "run-webhook", "buy", "sell",
                                  "backtest", "backtest-sweep", "optimize",
-                                 "grid-backtest", "notify-test"])
+                                 "grid-backtest", "grid-compare", "notify-test"])
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--quote", type=float, help="買入金額（報價幣）")
     parser.add_argument("--base", type=float, help="賣出數量（基礎幣）")
@@ -383,6 +417,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_optimize(bot, args)
         if args.command == "grid-backtest":
             return cmd_grid_backtest(bot, args)
+        if args.command == "grid-compare":
+            return cmd_grid_compare(bot, args)
         if args.command == "notify-test":
             return cmd_notify_test(bot)
         if args.command == "buy":

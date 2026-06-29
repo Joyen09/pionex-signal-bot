@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
 
 
 def _ohlc(k: Any) -> tuple[float, float, float]:
@@ -133,3 +133,205 @@ class GridBacktester:
             completed_grids=completed, buys=buys, sells=sells,
             final_price=final_price, buy_hold_return=buy_hold,
         )
+
+
+# ============================================================================
+# 動態網格回測：與 live GridRunner 同邏輯（ATR 區間 + ADX 過濾 + 跌破自動重開）
+# ============================================================================
+@dataclass
+class DynGridResult:
+    label: str
+    symbol: str
+    bars: int
+    start_cash: float
+    end_equity: float
+    realized: float
+    unrealized: float
+    buys: int
+    sells: int
+    completed: int
+    resets: int
+    paused_bars: int
+    max_drawdown: float
+    final_price: float
+    buy_hold_return: float
+
+    @property
+    def total_return(self) -> float:
+        return (self.end_equity - self.start_cash) / self.start_cash if self.start_cash else 0.0
+
+
+class DynamicGridBacktester:
+    """回放與 live GridRunner 相同的決策邏輯。
+
+    use_atr   : 區間用 ATR 動態（否則用 range_pct 固定）
+    use_regime: ADX 強趨勢時暫停開網格
+    use_reset : 跌破/突破區間時關閉並重開（動態網格）；False 則固定不重開
+    """
+
+    def __init__(self, *, grids: int = 20, quote_per_grid: float = 50.0,
+                 fee_rate: float = 0.0005, start_cash: Optional[float] = None,
+                 use_atr: bool = True, range_pct: float = 0.05,
+                 atr_period: int = 14, atr_mult: float = 6.0,
+                 use_regime: bool = True, adx_period: int = 14, adx_max: float = 30.0,
+                 use_reset: bool = True, breakout_buffer: float = 0.02):
+        self.grids = grids
+        self.quote_per_grid = quote_per_grid
+        self.fee_rate = fee_rate
+        self.start_cash = start_cash if start_cash is not None else quote_per_grid * grids
+        self.use_atr = use_atr
+        self.range_pct = range_pct
+        self.atr_period = atr_period
+        self.atr_mult = atr_mult
+        self.use_regime = use_regime
+        self.adx_period = adx_period
+        self.adx_max = adx_max
+        self.use_reset = use_reset
+        self.breakout_buffer = breakout_buffer
+
+    def _levels(self, lower: float, upper: float) -> list[float]:
+        step = (upper - lower) / self.grids
+        return [lower + i * step for i in range(self.grids + 1)]
+
+    def run(self, klines: list[dict[str, Any]], symbol: str, label: str = "") -> DynGridResult:
+        import pandas as pd
+        from .strategy import indicators
+
+        ohlc = [_ohlc(k) for k in klines]
+        n = len(ohlc)
+        highs = pd.Series([o[0] for o in ohlc])
+        lows = pd.Series([o[1] for o in ohlc])
+        closes = pd.Series([o[2] for o in ohlc])
+        atr_s = indicators.atr(highs, lows, closes, self.atr_period)
+        adx_s = indicators.adx(highs, lows, closes, self.adx_period)
+
+        cash = self.start_cash
+        active = False
+        lower = upper = 0.0
+        levels: list[float] = []
+        held: dict[int, float] = {}
+        last_price = closes.iloc[0]
+        realized = 0.0
+        buys = sells = completed = resets = paused = 0
+        peak = self.start_cash
+        max_dd = 0.0
+
+        def equity(price: float) -> float:
+            return cash + sum(q * price for q in held.values())
+
+        def is_ranging(i: int) -> bool:
+            if not self.use_regime:
+                return True
+            v = adx_s.iloc[i]
+            return True if v != v else float(v) < self.adx_max  # NaN→True
+
+        def bounds(i: int, price: float):
+            if self.use_atr:
+                a = atr_s.iloc[i]
+                if a == a and a > 0:
+                    half = self.atr_mult * float(a)
+                    return price - half, price + half
+                return None  # ATR 還沒準備好
+            return price * (1 - self.range_pct), price * (1 + self.range_pct)
+
+        def open_grid(i: int, price: float) -> bool:
+            nonlocal active, lower, upper, levels, held, last_price
+            b = bounds(i, price)
+            if b is None:
+                return False
+            lower, upper = b
+            levels = self._levels(lower, upper)
+            held = {}
+            last_price = price
+            active = True
+            return True
+
+        def close_grid(price: float):
+            nonlocal cash, held, active
+            for j, q in held.items():
+                cash += q * price * (1 - self.fee_rate)
+            held = {}
+            active = False
+
+        for i in range(n):
+            high, low, close = ohlc[i]
+            if not active:
+                if is_ranging(i):
+                    open_grid(i, close)
+                else:
+                    paused += 1
+                last_price = close
+                # 紀錄權益
+                peak = max(peak, equity(close))
+                if peak > 0:
+                    max_dd = max(max_dd, (peak - equity(close)) / peak)
+                continue
+
+            # 風險：跌破下緣 → 關閉（動態才重開）
+            if close < lower * (1 - self.breakout_buffer):
+                close_grid(close)
+                resets += 1
+                if self.use_reset and is_ranging(i):
+                    open_grid(i, close)
+                last_price = close
+            elif close > upper * (1 + self.breakout_buffer):
+                close_grid(close)
+                resets += 1
+                if self.use_reset and is_ranging(i):
+                    open_grid(i, close)
+                last_price = close
+            else:
+                # 正常穿越成交
+                for j in range(self.grids):
+                    buy_px, sell_px = levels[j], levels[j + 1]
+                    if j in held and last_price < sell_px <= high:
+                        q = held.pop(j)
+                        cash += q * sell_px * (1 - self.fee_rate)
+                        realized += q * (sell_px - buy_px) - q * sell_px * self.fee_rate
+                        sells += 1
+                        completed += 1
+                    if j not in held and last_price > buy_px >= low and cash >= self.quote_per_grid:
+                        spend = self.quote_per_grid
+                        q = (spend - spend * self.fee_rate) / buy_px
+                        cash -= spend
+                        held[j] = q
+                        buys += 1
+                last_price = close
+
+            eq = equity(close)
+            peak = max(peak, eq)
+            if peak > 0:
+                max_dd = max(max_dd, (peak - eq) / peak)
+
+        final_price = closes.iloc[-1]
+        inv_value = sum(q * final_price for q in held.values())
+        inv_cost = sum(q * levels[j] for j, q in held.items()) if levels else 0.0
+        unreal = inv_value - inv_cost
+        end_equity = cash + inv_value
+        bh = (final_price - closes.iloc[0]) / closes.iloc[0] if closes.iloc[0] else 0.0
+
+        return DynGridResult(
+            label=label or "dyn", symbol=symbol, bars=n,
+            start_cash=self.start_cash, end_equity=end_equity,
+            realized=realized, unrealized=unreal, buys=buys, sells=sells,
+            completed=completed, resets=resets, paused_bars=paused,
+            max_drawdown=max_dd, final_price=final_price, buy_hold_return=bh,
+        )
+
+
+def compare_grid_variants(klines: list[dict[str, Any]], symbol: str,
+                          grids: int = 20, start_cash: float = 1000.0,
+                          **kw) -> list[DynGridResult]:
+    """同一段資料比較三種網格：陽春固定 / 動態(ATR+重開) / 動態+ADX過濾。"""
+    qpg = start_cash / grids
+    common = dict(grids=grids, quote_per_grid=qpg, start_cash=start_cash, **kw)
+    variants = [
+        ("陽春固定網格", dict(use_atr=False, use_regime=False, use_reset=False)),
+        ("動態(ATR+重開)", dict(use_atr=True, use_regime=False, use_reset=True)),
+        ("動態+ADX過濾", dict(use_atr=True, use_regime=True, use_reset=True)),
+    ]
+    out = []
+    for label, opts in variants:
+        bt = DynamicGridBacktester(**{**common, **opts})
+        out.append(bt.run(klines, symbol, label=label))
+    return out
