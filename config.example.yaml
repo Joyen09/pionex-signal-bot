@@ -85,6 +85,8 @@ dca:                    # 智慧 DCA 定投 (python main.py run-dca)，只買不
   dip_step: 0.05        # 每跌離均線 5%，加碼一檔
   mult_per_step: 0.5    # 每檔多買 0.5 倍
   max_mult: 3.0         # 逢低最多買到基本額的 3 倍
+  take_profit_pct: 0    # 帳面獲利達此 % 自動停利（0=關閉；如 0.5=+50% 就賣）
+  take_profit_fraction: 1.0  # 停利時賣出比例（1.0=全賣後重新定投；0.5=賣一半續抱）
   poll_seconds: 30
 
 webhook:

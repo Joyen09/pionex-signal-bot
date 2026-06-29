@@ -31,6 +31,9 @@ class DcaRunner:
         self.mult_per_step = float(d.get("mult_per_step", 0.5))
         self.max_mult = float(d.get("max_mult", 3.0))
         self.poll_seconds = int(d.get("poll_seconds", 30))
+        # 停利：帳面獲利達此 % 就賣出落袋（0=關閉）；賣出比例 1.0=全賣後重新定投
+        self.take_profit_pct = float(d.get("take_profit_pct", 0) or 0)
+        self.tp_fraction = min(max(float(d.get("take_profit_fraction", 1.0)), 0.0), 1.0)
 
         dc = cfg.notify.get("daily_summary", {})
         self.summary_enabled = bool(dc.get("enabled", True))
@@ -71,14 +74,18 @@ class DcaRunner:
         avg = invested / base if base else 0.0
         pnl = value - invested
         pct = (pnl / invested * 100) if invested else 0.0
-        return "\n".join([
+        realized = st.get("realized_total", 0.0)
+        lines = [
             f"🟣 DCA 狀態（{self.symbol}）",
-            f"累積投入 {invested:.2f} USDT",
+            f"本輪投入 {invested:.2f} USDT",
             f"持有 {base:.8f}，均價 {avg:.2f}",
             f"現價 {price:.2f}，現值 {value:.2f}",
             f"未實現 {pnl:+.2f}（{pct:+.1f}%）",
             f"買入次數 {st.get('buys', 0)}",
-        ])
+        ]
+        if realized:
+            lines.append(f"累積已實現停利 {realized:+.2f}")
+        return "\n".join(lines)
 
     def _poll_commands(self) -> None:
         if not self.notifier.tg_enabled:
@@ -142,6 +149,50 @@ class DcaRunner:
             f"🟣 DCA 買入 {res.filled_quote:.2f} USDT{tag} @ {res.avg_price:.2f}",
             "info", important=True)
 
+    def _maybe_take_profit(self) -> None:
+        """帳面獲利達標 → 賣出落袋；全賣則重新開始定投。"""
+        if not self.take_profit_pct:
+            return
+        st = self.store.load_dca_state()
+        if not st:
+            return
+        base = st.get("total_base", 0.0)
+        invested = st.get("total_quote", 0.0)
+        if base <= 0 or invested <= 0:
+            return
+        try:
+            price = self.broker.get_price(self.symbol)
+        except Exception:  # noqa: BLE001
+            return
+        ret = (base * price - invested) / invested
+        if ret < self.take_profit_pct:
+            return
+
+        sell_base = base * self.tp_fraction
+        res = self.broker.market_sell(self.symbol, sell_base)
+        if not res.ok:
+            self.notifier.send(f"❌ DCA 停利賣出失敗：{res.error}", "error")
+            return
+        cost_sold = invested * self.tp_fraction
+        realized = res.filled_quote - cost_sold
+        st["realized_total"] = st.get("realized_total", 0.0) + realized
+        st["total_base"] = base - res.filled_base
+        st["total_quote"] = invested - cost_sold
+        if st["total_base"] <= 1e-12 or self.tp_fraction >= 1.0:
+            st["total_base"] = 0.0
+            st["total_quote"] = 0.0
+            st["buys"] = 0           # 全賣 → 重新開始定投
+            st["last_buy_ts"] = 0.0
+        self.store.save_dca_state(st)
+        self.store.record_trade(symbol=self.symbol, side="SELL", base=res.filled_base,
+                                quote=res.filled_quote, price=res.avg_price,
+                                simulated=res.simulated, source="dca:tp",
+                                realized_pnl=realized)
+        again = "，重新開始定投" if self.tp_fraction >= 1.0 else "，剩餘續抱"
+        self.notifier.send(
+            f"🎯 DCA 停利 +{ret*100:.1f}%！賣出 {res.filled_quote:.2f} USDT"
+            f"（落袋 {realized:+.2f}）{again}", "info", important=True)
+
     def run_forever(self) -> None:
         self._running = True
         mode = "實盤" if self.cfg.is_live else "紙上"
@@ -153,6 +204,7 @@ class DcaRunner:
         while self._running:
             try:
                 self._poll_commands()
+                self._maybe_take_profit()   # 先檢查停利
                 self._maybe_buy()
                 self._maybe_daily_summary()
             except Exception as exc:  # noqa: BLE001

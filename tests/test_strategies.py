@@ -335,6 +335,34 @@ def test_dca_smart_lowers_avg_cost_in_dips():
     assert smart.avg_cost < plain.avg_cost      # 逢低加碼均價更低
 
 
+def test_dca_take_profit_resets_position():
+    from pionexbot.config import Config
+    from pionexbot.store import Store
+    from pionexbot.broker import PaperBroker
+    from pionexbot.notifier import Notifier
+    from pionexbot.sources.dca_runner import DcaRunner
+
+    class FakeClient:
+        def get_klines(self, s, i, limit=50):
+            return [{"close": 60000} for _ in range(25)]
+
+    raw = {"trading": {"symbol": "BTC_USDT"},
+           "dca": {"quote_base": 5, "take_profit_pct": 0.5, "take_profit_fraction": 1.0}}
+    cfg = Config(mode="paper", raw=raw)
+    store = Store(":memory:")
+    broker = PaperBroker(client=None)
+    broker._last_price_cache["BTC_USDT"] = 60000
+    r = DcaRunner(cfg, FakeClient(), broker, store, Notifier())
+
+    r._maybe_buy()
+    assert store.load_dca_state()["total_base"] > 0
+    broker._last_price_cache["BTC_USDT"] = 96000   # +60% > 停利50%
+    r._maybe_take_profit()
+    st = store.load_dca_state()
+    assert st["total_base"] == 0                    # 全賣重置
+    assert st["realized_total"] > 0                 # 有落袋
+
+
 def test_grid_rejects_bad_range():
     from pionexbot.grid import GridBacktester
     try:
