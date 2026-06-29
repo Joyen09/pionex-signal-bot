@@ -134,6 +134,51 @@ def cmd_run_grid(bot: Bot) -> int:
     return 0
 
 
+def cmd_run_dca(bot: Bot) -> int:
+    from pionexbot.sources.dca_runner import DcaRunner
+    runner = DcaRunner(bot.cfg, bot.client, bot.broker, bot.store, bot.notifier)
+    try:
+        runner.run_forever()
+    except KeyboardInterrupt:
+        print("\n已停止。")
+        bot.notifier.send("🛑 DCA 機器人已手動停止。", "info", important=True)
+    except Exception as exc:  # noqa: BLE001
+        bot.notifier.send(f"💥 DCA 機器人異常結束：{exc}", "error")
+        raise
+    return 0
+
+
+def cmd_dca_backtest(bot: Bot, args) -> int:
+    from pionexbot.dca import compare_dca
+
+    cfg = bot.cfg
+    symbol = (args.symbol or cfg.symbol).upper()
+    interval = args.interval or "1D"
+    limit = args.limit or 1000
+    # every：每隔幾根 K 線買一次（1D 線時 every=7 ≈ 每週）
+    every = args.grids or 7   # 借用 --grids 當 every，避免再加參數
+
+    print(f"抓取 {symbol} {interval} 共 {limit} 根，比較 DCA（每 {every} 根買一次）...")
+    try:
+        klines = bot.client.get_klines_history(symbol, interval, total=limit)
+    except PionexError as exc:
+        print(f"❌ 抓 K 線失敗：{exc}")
+        return 1
+    if len(klines) < 50:
+        print(f"❌ K 線太少（{len(klines)}）")
+        return 1
+
+    results = compare_dca(klines, base=10.0, every=every)
+    print(f"\n{symbol} {interval}　{len(klines)} 根　每 {every} 根買 10 USDT")
+    print("\n方式        投入    現值    報酬     均價    買入次數")
+    print("─" * 56)
+    for r in results:
+        print(f"{r.label:<10}{r.invested:>6.0f}  {r.final_value:>6.0f}  "
+              f"{r.total_return*100:+6.1f}%  {r.avg_cost:>8.0f}  {r.buys:>4}")
+    print("\n判讀：『逢低加碼』的均價通常較低；在波動/下跌段報酬常優於陽春定額。")
+    return 0
+
+
 def cmd_run_webhook(bot: Bot) -> int:
     import uvicorn
     from pionexbot.sources.webhook import build_app
@@ -379,9 +424,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="派網訊號機器人")
     parser.add_argument("command",
                         choices=["test", "balance", "price", "status",
-                                 "run-strategy", "run-grid", "run-webhook", "buy", "sell",
+                                 "run-strategy", "run-grid", "run-dca", "run-webhook",
+                                 "buy", "sell",
                                  "backtest", "backtest-sweep", "optimize",
-                                 "grid-backtest", "grid-compare", "notify-test"])
+                                 "grid-backtest", "grid-compare",
+                                 "dca-backtest", "notify-test"])
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--quote", type=float, help="買入金額（報價幣）")
     parser.add_argument("--base", type=float, help="賣出數量（基礎幣）")
@@ -410,6 +457,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_run_strategy(bot)
         if args.command == "run-grid":
             return cmd_run_grid(bot)
+        if args.command == "run-dca":
+            return cmd_run_dca(bot)
         if args.command == "run-webhook":
             return cmd_run_webhook(bot)
         if args.command == "backtest":
@@ -422,6 +471,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_grid_backtest(bot, args)
         if args.command == "grid-compare":
             return cmd_grid_compare(bot, args)
+        if args.command == "dca-backtest":
+            return cmd_dca_backtest(bot, args)
         if args.command == "notify-test":
             return cmd_notify_test(bot)
         if args.command == "buy":

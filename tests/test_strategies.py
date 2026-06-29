@@ -310,6 +310,31 @@ def test_dynamic_grid_regime_filter_reduces_drawdown():
     assert smart.max_drawdown < plain.max_drawdown     # 回撤更小
 
 
+def test_dca_smart_amount_scales_on_dip():
+    from pionexbot.dca import smart_amount
+    # 價格等於均線 → 基本額
+    amt, mult = smart_amount(100, 100, 10, 0.05, 0.5, 3.0)
+    assert mult == 1.0 and amt == 10
+    # 價格低於均線 15% → 3 檔 → 1+3*0.5=2.5×
+    amt, mult = smart_amount(85, 100, 10, 0.05, 0.5, 3.0)
+    assert abs(mult - 2.5) < 1e-9 and abs(amt - 25) < 1e-9
+    # 封頂
+    amt, mult = smart_amount(50, 100, 10, 0.05, 0.5, 3.0)
+    assert mult == 3.0
+
+
+def test_dca_smart_lowers_avg_cost_in_dips():
+    from pionexbot.dca import compare_dca
+    closes = []
+    p = 100.0
+    for i in range(300):
+        p *= (1 - 0.002 + 0.06 * math.sin(i / 7))
+        closes.append(max(p, 5))
+    kl = [{"high": c, "low": c, "close": c} for c in closes]
+    plain, smart = compare_dca(kl, base=10, every=5)
+    assert smart.avg_cost < plain.avg_cost      # 逢低加碼均價更低
+
+
 def test_grid_rejects_bad_range():
     from pionexbot.grid import GridBacktester
     try:

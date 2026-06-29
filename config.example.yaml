@@ -77,6 +77,16 @@ grid:                   # 自動網格機器人 (python main.py run-grid)
   # lower: 50000
   # upper: 70000
 
+dca:                    # 智慧 DCA 定投 (python main.py run-dca)，只買不賣、長期累積
+  quote_base: 5         # 每次基本買入金額（USDT）
+  interval_hours: 24    # 多久買一次：24=每天，168=每週
+  indicator_interval: 1D  # 參考均線用的 K 線週期
+  ref_period: 20        # 參考均線期數（如 20 日均線）
+  dip_step: 0.05        # 每跌離均線 5%，加碼一檔
+  mult_per_step: 0.5    # 每檔多買 0.5 倍
+  max_mult: 3.0         # 逢低最多買到基本額的 3 倍
+  poll_seconds: 30
+
 webhook:
   host: 0.0.0.0
   port: 8080

@@ -108,6 +108,13 @@ class Store:
         raw = self._get("grid_state", "")
         return json.loads(raw) if raw else None
 
+    def save_dca_state(self, state: dict) -> None:
+        self._set("dca_state", json.dumps(state))
+
+    def load_dca_state(self) -> Optional[dict]:
+        raw = self._get("dca_state", "")
+        return json.loads(raw) if raw else None
+
     def stats_since(self, ts: float) -> tuple[int, float]:
         """回傳自 ts(秒) 以來的 (成交筆數, 已實現損益總和)。"""
         row = self.conn.execute(
