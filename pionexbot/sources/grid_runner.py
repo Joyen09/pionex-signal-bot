@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
+from typing import Optional
 
 from ..config import Config
 from ..notifier import Notifier
@@ -40,7 +41,21 @@ class GridRunner:
         self.breakout_buffer = float(g.get("breakout_buffer", 0.02))
         self.max_loss_quote = float(g.get("max_loss_quote", 0) or 0) or None
         self.reset_on_breakout = bool(g.get("reset_on_breakout", True))
+
+        # ① ATR 動態區間：range_mode = fixed | atr
+        self.range_mode = str(g.get("range_mode", "fixed")).lower()
+        self.atr_period = int(g.get("atr_period", 14))
+        self.atr_mult = float(g.get("atr_mult", 6))
+        # ② 震盪盤過濾：ADX 高於 adx_max（強趨勢）就不開網格
+        self.regime_filter = bool(g.get("regime_filter", False))
+        self.adx_period = int(g.get("adx_period", 14))
+        self.adx_max = float(g.get("adx_max", 30))
+        # 指標用的 K 線
+        self.indicator_interval = str(g.get("indicator_interval", "60M"))
+        self.indicator_limit = int(g.get("indicator_limit", 150))
+
         self._running = False
+        self._paused = False   # 是否因強趨勢暫停（避免重複通知）
 
         # 每日結算（utc_hour 預設 12 = 台灣晚上 8 點）
         dcfg = cfg.notify.get("daily_summary", {})
@@ -57,12 +72,66 @@ class GridRunner:
         step = (upper - lower) / self.grids
         return [lower + i * step for i in range(self.grids + 1)]
 
-    def _new_grid(self, price: float) -> dict:
+    # ----- 指標（ATR / ADX）-----
+    def _ohlc_series(self):
+        """抓指標用 K 線，回傳 (high, low, close) 三個 pandas Series 或 None。"""
+        if self.client is None:
+            return None
+        try:
+            import pandas as pd
+            kl = self.client.get_klines(self.symbol, self.indicator_interval,
+                                        limit=self.indicator_limit)
+        except Exception:  # noqa: BLE001
+            return None
+        if not kl or len(kl) < max(self.atr_period, self.adx_period) + 2:
+            return None
+        def col(keys):
+            out = []
+            for k in kl:
+                if isinstance(k, dict):
+                    v = next((k[x] for x in keys if x in k), None)
+                else:
+                    idx = {"h": 2, "l": 3, "c": 4}[keys[0][0]]
+                    v = k[idx]
+                out.append(float(v))
+            return pd.Series(out)
+        return col(["high", "h"]), col(["low", "l"]), col(["close", "c"])
+
+    def _atr_value(self) -> Optional[float]:
+        s = self._ohlc_series()
+        if s is None:
+            return None
+        from ..strategy import indicators
+        val = indicators.atr(s[0], s[1], s[2], self.atr_period).iloc[-1]
+        return float(val) if val == val else None  # 過濾 NaN
+
+    def _is_ranging(self) -> bool:
+        """ADX 判斷是否為震盪盤（適合網格）。取不到資料時預設 True（不阻擋）。"""
+        if not self.regime_filter:
+            return True
+        s = self._ohlc_series()
+        if s is None:
+            return True
+        from ..strategy import indicators
+        adx_val = indicators.adx(s[0], s[1], s[2], self.adx_period).iloc[-1]
+        if adx_val != adx_val:  # NaN
+            return True
+        return float(adx_val) < self.adx_max
+
+    def _grid_bounds(self, price: float) -> tuple[float, float]:
+        # ATR 模式：用波動決定半區間
+        if self.range_mode == "atr":
+            atr_val = self._atr_value()
+            if atr_val:
+                half = self.atr_mult * atr_val
+                return price - half, price + half
+        # 固定模式 / ATR 取不到時退回
         if self.auto_range or not (self.lower_cfg and self.upper_cfg):
-            lower = price * (1 - self.range_pct)
-            upper = price * (1 + self.range_pct)
-        else:
-            lower, upper = float(self.lower_cfg), float(self.upper_cfg)
+            return price * (1 - self.range_pct), price * (1 + self.range_pct)
+        return float(self.lower_cfg), float(self.upper_cfg)
+
+    def _new_grid(self, price: float) -> dict:
+        lower, upper = self._grid_bounds(price)
         state = {"active": True, "lower": lower, "upper": upper,
                  "grids": self.grids, "held": {}, "realized": 0.0,
                  "created_price": price, "last_price": price}
@@ -71,6 +140,20 @@ class GridRunner:
             f"🔲 開新網格：{lower:.2f}~{upper:.2f}（{self.grids} 格 / 每格 "
             f"{self.quote_per_grid} USDT）現價 {price:.2f}", "info", important=True)
         return state
+
+    def _try_open(self, price: float) -> None:
+        """要開新網格前，先用 ADX 確認是震盪盤；強趨勢則暫停（不接刀）。"""
+        if not self._is_ranging():
+            if not self._paused:
+                self._paused = True
+                self.notifier.send(
+                    "⏸️ 趨勢過強（ADX 偏高），暫停開網格，等行情轉震盪再自動開。",
+                    "info", important=True)
+            return
+        if self._paused:
+            self._paused = False
+            self.notifier.send("▶️ 行情轉為震盪，恢復開網格。", "info", important=True)
+        self._new_grid(price)
 
     def _close_grid(self, state: dict, price: float, reason: str) -> None:
         held = {int(k): v for k, v in state.get("held", {}).items()}
@@ -162,7 +245,7 @@ class GridRunner:
 
         state = self.store.load_grid_state()
         if not state or not state.get("active"):
-            self._new_grid(price)
+            self._try_open(price)
             return
 
         lower, upper = state["lower"], state["upper"]
@@ -178,13 +261,13 @@ class GridRunner:
             reason = "跌破下緣" if breach_down else f"未實現虧損達 {unreal:.2f}"
             self._close_grid(state, price, reason)
             if self.reset_on_breakout:
-                self._new_grid(price)
+                self._try_open(price)   # 重開前先確認不是強趨勢
             return
 
         # 突破上緣 → 獲利了結後向上重新定位
         if price > upper * (1 + self.breakout_buffer) and self.reset_on_breakout:
             self._close_grid(state, price, "突破上緣，向上重新定位")
-            self._new_grid(price)
+            self._try_open(price)
             return
 
         # 正常網格成交：只在價格「穿越」某格線時才成交那一格

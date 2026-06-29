@@ -51,15 +51,29 @@ strategy:
     # num_std: 2.0
 
 grid:                   # 自動網格機器人 (python main.py run-grid)
-  auto_range: true      # true = 自動以「現價 ±range_pct」當區間
-  range_pct: 0.15       # 自動區間幅度（0.15 = 現價上下各 15%）
+  auto_range: true      # true = 自動以「現價 ±range_pct」當區間（range_mode=fixed 時）
+  range_pct: 0.15       # 固定模式的區間幅度（0.15 = 現價上下各 15%）
   grids: 10             # 網格數量
   quote_per_grid: 5     # 每格買入金額（USDT）。注意：grids × quote_per_grid 要 ≤ 你的餘額
   poll_seconds: 20      # 多久檢查一次價格
   breakout_buffer: 0.02 # 超出區間多少比例才算突破（避免邊緣抖動誤判）
   reset_on_breakout: true   # 突破/跌破區間時自動關閉並重開新網格
   max_loss_quote: 0     # 未實現虧損達此金額(USDT)就關閉重開；0 = 只靠區間判斷
-  # auto_range: false 時改用固定區間：
+
+  # ① ATR 動態區間：依市場波動自動決定網格寬窄（市場越瘋格子越寬）
+  range_mode: atr       # fixed = 用 range_pct；atr = 用 ATR 動態
+  atr_period: 14
+  atr_mult: 6           # 半區間 = atr_mult × ATR（越大區間越寬、越不易突破）
+
+  # ② 震盪盤過濾：強趨勢(ADX高)時不開網格，避免在單邊行情一直接刀
+  regime_filter: true
+  adx_period: 14
+  adx_max: 30           # ADX 高於此值(強趨勢)就暫停開網格，等轉震盪再自動開
+
+  indicator_interval: 60M   # ATR/ADX 用的 K 線週期
+  indicator_limit: 150
+
+  # range_mode=fixed 且 auto_range=false 時改用固定區間：
   # lower: 50000
   # upper: 70000
 

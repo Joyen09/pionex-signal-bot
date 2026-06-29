@@ -35,6 +35,33 @@ def macd(series: pd.Series, fast: int = 12, slow: int = 26,
     return macd_line, signal_line, hist
 
 
+def atr(high: pd.Series, low: pd.Series, close: pd.Series,
+        period: int = 14) -> pd.Series:
+    """真實波動幅度 (Average True Range)。"""
+    prev_close = close.shift(1)
+    tr = pd.concat([
+        (high - low),
+        (high - prev_close).abs(),
+        (low - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    return tr.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+
+
+def adx(high: pd.Series, low: pd.Series, close: pd.Series,
+        period: int = 14) -> pd.Series:
+    """平均趨向指標 (ADX)。<20~25 代表無明顯趨勢（適合網格），越高趨勢越強。"""
+    up = high.diff()
+    down = -low.diff()
+    plus_dm = ((up > down) & (up > 0)) * up
+    minus_dm = ((down > up) & (down > 0)) * down
+    atr_ = atr(high, low, close, period)
+    plus_di = 100 * (plus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr_)
+    minus_di = 100 * (minus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr_)
+    denom = (plus_di + minus_di).replace(0, float("nan"))
+    dx = 100 * (plus_di - minus_di).abs() / denom
+    return dx.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+
+
 def bollinger(series: pd.Series, period: int = 20,
               num_std: float = 2.0) -> tuple[pd.Series, pd.Series, pd.Series]:
     """布林通道。回傳 (中軌, 上軌, 下軌)。"""

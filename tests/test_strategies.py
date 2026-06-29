@@ -237,6 +237,59 @@ def test_grid_status_text_reports_holdings():
     assert "已實現利潤" in txt
 
 
+def test_adx_high_in_trend_low_in_range():
+    import pandas as pd
+    from pionexbot.strategy import indicators
+    trend = list(range(100, 160))
+    osc = [100 + 5 * math.sin(i / 3) for i in range(60)]
+
+    def adx_last(closes):
+        h = pd.Series([c + 1 for c in closes])
+        l = pd.Series([c - 1 for c in closes])
+        c = pd.Series(closes)
+        return indicators.adx(h, l, c, 14).iloc[-1]
+
+    assert adx_last(trend) > adx_last(osc)        # 趨勢的 ADX 高於震盪
+
+
+def test_grid_regime_filter_blocks_open_in_trend():
+    from pionexbot.config import Config
+    from pionexbot.store import Store
+    from pionexbot.broker import PaperBroker
+    from pionexbot.notifier import Notifier
+    from pionexbot.sources.grid_runner import GridRunner
+
+    class FakeClient:
+        def __init__(self, closes):
+            self.closes = closes
+
+        def get_klines(self, sym, interval, limit=150):
+            return [{"high": c + 50, "low": c - 50, "close": c} for c in self.closes]
+
+    raw = {"trading": {"symbol": "BTC_USDT"},
+           "grid": {"range_mode": "atr", "atr_mult": 6, "grids": 10,
+                    "quote_per_grid": 5, "regime_filter": True, "adx_max": 30}}
+    cfg = Config(mode="paper", raw=raw)
+    broker = PaperBroker(client=None)
+    broker._last_price_cache["BTC_USDT"] = 60000
+
+    # 強趨勢 → 不應開網格
+    store = Store(":memory:")
+    r = GridRunner(cfg, FakeClient([60000 + i * 40 for i in range(60)]),
+                   broker, store, Notifier())
+    r.run_once()
+    st = store.load_grid_state()
+    assert not (st and st.get("active"))
+
+    # 震盪 → 應開網格，且用 ATR 區間
+    store2 = Store(":memory:")
+    r2 = GridRunner(cfg, FakeClient([60000 + 300 * math.sin(i / 3) for i in range(60)]),
+                    broker, store2, Notifier())
+    r2.run_once()
+    st2 = store2.load_grid_state()
+    assert st2 and st2.get("active")
+
+
 def test_grid_rejects_bad_range():
     from pionexbot.grid import GridBacktester
     try:
