@@ -290,12 +290,13 @@ def cmd_grid_backtest(bot: Bot, args) -> int:
     from pionexbot.grid import GridBacktester, _ohlc
 
     cfg = bot.cfg
+    symbol = (args.symbol or cfg.symbol).upper()
     interval = args.interval or "4H"
     limit = args.limit or 2000
 
-    print(f"抓取 {cfg.symbol} {interval} 共 {limit} 根 K 線 ...")
+    print(f"抓取 {symbol} {interval} 共 {limit} 根 K 線 ...")
     try:
-        klines = bot.client.get_klines_history(cfg.symbol, interval, total=limit)
+        klines = bot.client.get_klines_history(symbol, interval, total=limit)
     except PionexError as exc:
         print(f"❌ 抓 K 線失敗：{exc}")
         return 1
@@ -312,7 +313,7 @@ def cmd_grid_backtest(bot: Bot, args) -> int:
 
     print(f"網格區間 {lower:.2f} ~ {upper:.2f}，{grids} 格，每格 {quote} USDT")
     bt = GridBacktester(lower, upper, grids, quote_per_grid=quote)
-    result = bt.run(klines, cfg.symbol)
+    result = bt.run(klines, symbol)
     print(result.summary())
     if result.unrealized < -result.start_cash * 0.1:
         print("\n⚠️ 未實現虧損偏大：價格可能已跌破網格下緣（住套房），這是網格在跌勢的典型風險。")
@@ -323,14 +324,15 @@ def cmd_grid_compare(bot: Bot, args) -> int:
     from pionexbot.grid import compare_grid_variants
 
     cfg = bot.cfg
+    symbol = (args.symbol or cfg.symbol).upper()
     interval = args.interval or "4H"
     limit = args.limit or 3000
     grids = args.grids or 20
     cash = args.cash or 1000.0
 
-    print(f"抓取 {cfg.symbol} {interval} 共 {limit} 根 K 線，比較三種網格 ...")
+    print(f"抓取 {symbol} {interval} 共 {limit} 根 K 線，比較三種網格 ...")
     try:
-        klines = bot.client.get_klines_history(cfg.symbol, interval, total=limit)
+        klines = bot.client.get_klines_history(symbol, interval, total=limit)
     except PionexError as exc:
         print(f"❌ 抓 K 線失敗：{exc}")
         return 1
@@ -338,7 +340,7 @@ def cmd_grid_compare(bot: Bot, args) -> int:
         print(f"❌ K 線太少（{len(klines)}）")
         return 1
 
-    results = compare_grid_variants(klines, cfg.symbol, grids=grids, start_cash=cash)
+    results = compare_grid_variants(klines, symbol, grids=grids, start_cash=cash)
     bh = results[0].buy_hold_return * 100
     print(f"\n資料 {len(klines)} 根　起始資金 {cash:.0f}　{grids} 格　"
           f"買入持有 {bh:+.2f}%")
@@ -390,6 +392,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lower", type=float, help="網格下緣價格")
     parser.add_argument("--upper", type=float, help="網格上緣價格")
     parser.add_argument("--grids", type=int, help="網格數量")
+    parser.add_argument("--symbol", help="覆寫交易對（如 ETH_USDT），用於回測掃描")
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
