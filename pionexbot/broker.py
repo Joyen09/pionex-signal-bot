@@ -10,6 +10,7 @@ executor 只認介面，不在意背後是模擬還是真錢，方便切換。
 """
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
 from typing import Optional
 
@@ -47,16 +48,58 @@ class LiveBroker(Broker):
     def get_price(self, symbol: str) -> float:
         return self.client.get_ticker_price(symbol)
 
+    @staticmethod
+    def _extract_fill(d: dict) -> tuple[float, float]:
+        """從訂單物件盡量抓出 (已成交基礎幣, 已成交報價幣)，容忍不同欄位命名。"""
+        base_keys = ("filledSize", "filledBase", "executedQty", "filled",
+                     "fillSize", "cumBase", "tradedBase", "size")
+        quote_keys = ("filledAmount", "filledQuote", "cumQuote", "tradedQuote",
+                      "fillAmount", "amount")
+        def pick(keys):
+            for k in keys:
+                v = d.get(k)
+                if v not in (None, "", "0", 0):
+                    try:
+                        return float(v)
+                    except (TypeError, ValueError):
+                        pass
+            return 0.0
+        fb, fq = pick(base_keys), pick(quote_keys)
+        if fb and not fq:  # 只有數量沒有金額 → 用均價推算
+            for pk in ("filledPrice", "averagePrice", "avgPrice", "price"):
+                if d.get(pk):
+                    fq = fb * float(d[pk])
+                    break
+        return fb, fq
+
     def _parse_fill(self, resp: dict, side: Side, symbol: str) -> OrderResult:
-        data = resp.get("data", {})
-        order_id = str(data.get("orderId", ""))
-        filled_base = float(data.get("filledSize", data.get("size", 0)) or 0)
-        filled_quote = float(data.get("filledAmount", data.get("amount", 0)) or 0)
+        data = resp.get("data", {}) or {}
+        order_id = str(data.get("orderId", data.get("id", "")))
+        filled_base, filled_quote = self._extract_fill(data)
+
+        # 市價單的下單回應通常只有 orderId、不含成交明細 → 查詢該訂單取得實際成交
+        if filled_base <= 0 and order_id:
+            for _ in range(6):
+                try:
+                    od = self.client.get_order(order_id).get("data", {}) or {}
+                except PionexError:
+                    break
+                fb, fq = self._extract_fill(od)
+                status = str(od.get("status", "")).upper()
+                if fb > 0:
+                    filled_base, filled_quote, data = fb, fq, od
+                    break
+                if status in ("CLOSED", "FILLED", "COMPLETED", "CANCELED",
+                              "CANCELLED", "REJECTED"):
+                    data = od
+                    break
+                time.sleep(0.5)
+
         avg = filled_quote / filled_base if filled_base else 0.0
         return OrderResult(
             ok=True, side=side, symbol=symbol, simulated=False,
             filled_base=filled_base, filled_quote=filled_quote,
-            avg_price=avg, order_id=order_id, raw=resp,
+            avg_price=avg, order_id=order_id, raw=data,
         )
 
     def market_buy(self, symbol: str, quote_amount: float) -> OrderResult:
