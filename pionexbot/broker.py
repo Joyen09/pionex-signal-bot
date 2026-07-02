@@ -10,6 +10,7 @@ executor 只認介面，不在意背後是模擬還是真錢，方便切換。
 """
 from __future__ import annotations
 
+import math
 import time
 from abc import ABC, abstractmethod
 from typing import Optional
@@ -44,9 +45,36 @@ class LiveBroker(Broker):
 
     def __init__(self, client: PionexClient):
         self.client = client
+        self._prec_cache: dict[str, int] = {}
 
     def get_price(self, symbol: str) -> float:
         return self.client.get_ticker_price(symbol)
+
+    def _base_precision(self, symbol: str) -> int:
+        """查詢交易對的基礎幣數量精度，查不到時用保守的 6 位。"""
+        if symbol not in self._prec_cache:
+            prec = 6
+            try:
+                info = self.client.get_symbol_info(symbol) or {}
+                for key in ("basePrecision", "quantityPrecision", "sizePrecision"):
+                    if key in info:
+                        prec = int(info[key])
+                        break
+            except Exception:  # noqa: BLE001 - 查不到規格就用保守預設
+                pass
+            self._prec_cache[symbol] = prec
+        return self._prec_cache[symbol]
+
+    def _fmt_size(self, symbol: str, size: float) -> str:
+        """賣出數量依交易對精度「無條件捨去」並輸出固定小數字串。
+
+        str(float) 的長尾（如 0.000198990637194）會被 API 的 size filter 拒單；
+        捨去而非四捨五入，避免賣超過實際持有量。"""
+        prec = self._base_precision(symbol)
+        q = 10 ** prec
+        truncated = math.floor(size * q + 1e-9) / q
+        s = f"{truncated:.{prec}f}".rstrip("0").rstrip(".")
+        return s or "0"
 
     @staticmethod
     def _extract_fill(d: dict) -> tuple[float, float]:
@@ -111,21 +139,24 @@ class LiveBroker(Broker):
 
     def market_sell(self, symbol: str, base_size: float) -> OrderResult:
         try:
-            resp = self.client.place_order(symbol, "SELL", "MARKET", size=base_size)
+            resp = self.client.place_order(symbol, "SELL", "MARKET",
+                                           size=self._fmt_size(symbol, base_size))
             return self._parse_fill(resp, Side.SELL, symbol)
         except PionexError as exc:
             return OrderResult(ok=False, side=Side.SELL, symbol=symbol, error=str(exc))
 
     def limit_buy(self, symbol: str, base_size: float, price: float) -> OrderResult:
         try:
-            resp = self.client.place_order(symbol, "BUY", "LIMIT", size=base_size, price=price)
+            resp = self.client.place_order(symbol, "BUY", "LIMIT",
+                                           size=self._fmt_size(symbol, base_size), price=price)
             return self._parse_fill(resp, Side.BUY, symbol)
         except PionexError as exc:
             return OrderResult(ok=False, side=Side.BUY, symbol=symbol, error=str(exc))
 
     def limit_sell(self, symbol: str, base_size: float, price: float) -> OrderResult:
         try:
-            resp = self.client.place_order(symbol, "SELL", "LIMIT", size=base_size, price=price)
+            resp = self.client.place_order(symbol, "SELL", "LIMIT",
+                                           size=self._fmt_size(symbol, base_size), price=price)
             return self._parse_fill(resp, Side.SELL, symbol)
         except PionexError as exc:
             return OrderResult(ok=False, side=Side.SELL, symbol=symbol, error=str(exc))
