@@ -56,6 +56,7 @@ class GridRunner:
 
         self._running = False
         self._paused = False   # 是否因強趨勢暫停（避免重複通知）
+        self._last_fail = ""   # 下單失敗去重，避免同一錯誤每輪洗版
 
         # 每日結算（utc_hour 預設 12 = 台灣晚上 8 點）
         dcfg = cfg.notify.get("daily_summary", {})
@@ -155,17 +156,28 @@ class GridRunner:
             self.notifier.send("▶️ 行情轉為震盪，恢復開網格。", "info", important=True)
         self._new_grid(price)
 
+    def _order_fail(self, msg: str) -> None:
+        """下單失敗：第一次推播通知，之後同樣的錯誤只記 log（避免每 20 秒洗版）。"""
+        if msg != self._last_fail:
+            self._last_fail = msg
+            self.notifier.send(f"❌ {msg}", "error")
+        else:
+            self.notifier.send(f"❌ {msg}", "warning", push=False)
+
     def _close_grid(self, state: dict, price: float, reason: str) -> None:
         held = {int(k): v for k, v in state.get("held", {}).items()}
         total_qty = sum(held.values())
         realized = state.get("realized", 0.0)
         if total_qty > 0:
             res = self.broker.market_sell(self.symbol, total_qty)
-            if res.ok:
-                self.store.record_trade(
-                    symbol=self.symbol, side="SELL", base=res.filled_base,
-                    quote=res.filled_quote, price=res.avg_price,
-                    simulated=res.simulated, source="grid:close")
+            if not res.ok:
+                # 平倉失敗：保留狀態下一輪重試，絕不能弄丟持倉追蹤
+                self._order_fail(f"關閉網格平倉失敗（{total_qty:.8f} BTC）：{res.error}")
+                return
+            self.store.record_trade(
+                symbol=self.symbol, side="SELL", base=res.filled_base,
+                quote=res.filled_quote, price=res.avg_price,
+                simulated=res.simulated, source="grid:close")
         state["active"] = False
         state["held"] = {}
         self.store.save_grid_state(state)
@@ -287,6 +299,10 @@ class GridRunner:
                     # 成交頻繁：只記 log、不外推通知
                     self.notifier.send(f"🟢 網格賣出 @ {res.avg_price:.2f}（+{profit:.2f}）",
                                        "info", push=False)
+                else:
+                    self._order_fail(
+                        f"網格賣出失敗（格 {buy_px:.0f}→{sell_px:.0f}，"
+                        f"size={held[i]}）：{res.error}")
             # 買入：未持有，且價格由上『向下穿過』該格
             if i not in held and last > buy_px >= price:
                 res = self.broker.market_buy(self.symbol, self.quote_per_grid)
@@ -298,6 +314,8 @@ class GridRunner:
                         simulated=res.simulated, source="grid")
                     self.notifier.send(f"🔴 網格買入 @ {res.avg_price:.2f}",
                                        "info", push=False)
+                else:
+                    self._order_fail(f"網格買入失敗（格 {buy_px:.0f}）：{res.error}")
 
         state["held"] = {str(k): v for k, v in held.items()}
         state["last_price"] = price
