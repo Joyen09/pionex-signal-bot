@@ -187,6 +187,18 @@ class PionexClient:
         ordered = [collected[t] for t in sorted(collected)]
         return ordered[-total:]
 
+    def get_symbols(self) -> list[dict[str, Any]]:
+        """取得所有交易對的規格（含最低下單量等 filter）。"""
+        data = self._request("GET", "/api/v1/common/symbols")
+        d = data.get("data", {})
+        return d.get("symbols", d if isinstance(d, list) else [])
+
+    def get_symbol_info(self, symbol: str) -> Optional[dict[str, Any]]:
+        for s in self.get_symbols():
+            if str(s.get("symbol", "")).upper() == symbol.upper():
+                return s
+        return None
+
     def get_ticker_price(self, symbol: str) -> float:
         """取得最新成交價（用 24h ticker 的 close）。"""
         data = self._request("GET", "/api/v1/market/tickers",
