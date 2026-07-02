@@ -395,8 +395,28 @@ def cmd_grid_compare(bot: Bot, args) -> int:
         paused_pct = r.paused_bars / r.bars * 100 if r.bars else 0
         print(f"{r.label:<16}{r.total_return*100:+7.2f}%  {r.max_drawdown*100:6.1f}%  "
               f"{r.completed:>7}  {r.resets:>4}  {paused_pct:4.0f}%")
-    print("\n判讀：比較『動態+ADX過濾』vs『陽春固定』的報酬與回撤；"
+    print("\n判讀：比較『動態+ADX過濾』 vs『陽春固定』的報酬與回撤；"
           "若前者報酬更高或回撤更小，代表 ATR/ADX 升級有效。")
+    return 0
+
+
+def cmd_symbol_info(bot: Bot, args) -> int:
+    symbol = (args.symbol or bot.cfg.symbol).upper()
+    try:
+        info = bot.client.get_symbol_info(symbol)
+    except PionexError as exc:
+        print(f"❌ {exc}")
+        return 1
+    if not info:
+        print(f"找不到 {symbol}")
+        return 1
+    print(f"=== {symbol} 交易規格 ===")
+    for k, v in info.items():
+        print(f"  {k}: {v}")
+    # 常見的最低金額欄位
+    for key in ("minAmount", "minTradeSize", "minTradeDumping", "minValue"):
+        if key in info:
+            print(f"\n➡ 最低下單相關：{key} = {info[key]}")
     return 0
 
 
@@ -417,6 +437,10 @@ def cmd_manual(bot: Bot, action: Action, quote: float | None, base: float | None
                  quote_amount=quote, base_size=base, reason="手動下單")
     result = bot.executor.handle(sig)
     print(result or "未成交（被風控擋下或 HOLD）")
+    # 若實盤成交量解析為 0，印出原始訂單資料以便診斷欄位名稱
+    if result and result.ok and not result.simulated and result.filled_base == 0:
+        print("⚠ 成交量解析為 0，原始訂單資料（請貼給我對照欄位）：")
+        print(result.raw)
     return 0 if (result and result.ok) else 1
 
 
@@ -428,7 +452,7 @@ def main(argv: list[str] | None = None) -> int:
                                  "buy", "sell",
                                  "backtest", "backtest-sweep", "optimize",
                                  "grid-backtest", "grid-compare",
-                                 "dca-backtest", "notify-test"])
+                                 "dca-backtest", "symbol-info", "notify-test"])
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--quote", type=float, help="買入金額（報價幣）")
     parser.add_argument("--base", type=float, help="賣出數量（基礎幣）")
@@ -473,6 +497,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_grid_compare(bot, args)
         if args.command == "dca-backtest":
             return cmd_dca_backtest(bot, args)
+        if args.command == "symbol-info":
+            return cmd_symbol_info(bot, args)
         if args.command == "notify-test":
             return cmd_notify_test(bot)
         if args.command == "buy":
