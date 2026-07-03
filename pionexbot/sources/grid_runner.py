@@ -282,11 +282,11 @@ class GridRunner:
             self._try_open(price)
             return
 
-        # 正常網格成交：只在價格「穿越」某格線時才成交那一格
+        # 正常網格成交
         for i in range(self.grids):
             buy_px, sell_px = levels[i], levels[i + 1]
-            # 賣出：持有，且價格由下『向上穿過』上一格
-            if i in held and last < sell_px <= price:
+            # 賣出：持有，且價格已達上一格（不要求「穿越」→ 失敗/重啟後可自動補賣重試）
+            if i in held and price >= sell_px:
                 res = self.broker.market_sell(self.symbol, held[i])
                 if res.ok:
                     profit = (res.avg_price - buy_px) * res.filled_base
