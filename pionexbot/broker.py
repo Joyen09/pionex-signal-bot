@@ -78,25 +78,35 @@ class LiveBroker(Broker):
 
     @staticmethod
     def _extract_fill(d: dict) -> tuple[float, float]:
-        """從訂單物件盡量抓出 (已成交基礎幣, 已成交報價幣)，容忍不同欄位命名。"""
-        base_keys = ("filledSize", "filledBase", "executedQty", "filled",
-                     "fillSize", "cumBase", "tradedBase", "size")
+        """從訂單物件抓出 (已成交基礎幣, 已成交報價幣)。
+
+        只認「成交」欄位——size/amount 是下單參數，訂單還沒成交時也存在，
+        絕不能當成交量；市價單的 price 欄位是 0，也不能當成交均價。"""
+        base_keys = ("filledSize", "filledBase", "executedQty",
+                     "fillSize", "cumBase", "tradedBase")
         quote_keys = ("filledAmount", "filledQuote", "cumQuote", "tradedQuote",
-                      "fillAmount", "amount")
+                      "fillAmount")
         def pick(keys):
             for k in keys:
                 v = d.get(k)
-                if v not in (None, "", "0", 0):
-                    try:
-                        return float(v)
-                    except (TypeError, ValueError):
-                        pass
+                if v in (None, ""):
+                    continue
+                try:
+                    f = float(v)
+                except (TypeError, ValueError):
+                    continue
+                if f > 0:
+                    return f
             return 0.0
         fb, fq = pick(base_keys), pick(quote_keys)
-        if fb and not fq:  # 只有數量沒有金額 → 用均價推算
-            for pk in ("filledPrice", "averagePrice", "avgPrice", "price"):
-                if d.get(pk):
-                    fq = fb * float(d[pk])
+        if fb and not fq:  # 只有數量沒有金額 → 用「大於 0 的」均價欄位推算
+            for pk in ("filledPrice", "averagePrice", "avgPrice"):
+                try:
+                    p = float(d.get(pk) or 0)
+                except (TypeError, ValueError):
+                    p = 0.0
+                if p > 0:
+                    fq = fb * p
                     break
         return fb, fq
 
@@ -106,6 +116,7 @@ class LiveBroker(Broker):
         filled_base, filled_quote = self._extract_fill(data)
 
         # 市價單的下單回應通常只有 orderId、不含成交明細 → 查詢該訂單取得實際成交
+        # 注意：成交欄位可能延遲更新，要輪詢等到出現或訂單結束為止
         if filled_base <= 0 and order_id:
             for _ in range(6):
                 try:
@@ -117,11 +128,33 @@ class LiveBroker(Broker):
                 if fb > 0:
                     filled_base, filled_quote, data = fb, fq, od
                     break
-                if status in ("CLOSED", "FILLED", "COMPLETED", "CANCELED",
-                              "CANCELLED", "REJECTED"):
+                if status in ("CLOSED", "FILLED", "COMPLETED"):
+                    # 已結束但成交欄位仍空：市價單「結束＝已成交」，退用下單參數
+                    def _f(key):
+                        try:
+                            return float(od.get(key, 0) or 0)
+                        except (TypeError, ValueError):
+                            return 0.0
+                    filled_base, filled_quote, data = _f("size"), _f("amount"), od
+                    break
+                if status in ("CANCELED", "CANCELLED", "REJECTED"):
                     data = od
                     break
                 time.sleep(0.5)
+
+        # 最後保險：只有單邊數字（算不出均價）→ 用現價回推，避免記帳出現 0 價
+        if filled_base > 0 and filled_quote <= 0:
+            try:
+                filled_quote = filled_base * self.client.get_ticker_price(symbol)
+            except PionexError:
+                pass
+        elif filled_quote > 0 and filled_base <= 0:
+            try:
+                px = self.client.get_ticker_price(symbol)
+                if px > 0:
+                    filled_base = filled_quote / px
+            except PionexError:
+                pass
 
         avg = filled_quote / filled_base if filled_base else 0.0
         return OrderResult(
