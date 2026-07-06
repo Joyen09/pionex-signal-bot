@@ -7,6 +7,7 @@
     * 價格跌破區間下緣（含緩衝）或未實現虧損超過上限 → 平倉關閉整個網格，
       然後在「現價」重新開一個新網格繼續交易。
     * 價格突破區間上緣 → 獲利了結後向上重新定位。
+    * 空手且價格出界 → 搬家零成本，不等緩衝直接重新定位。
 - 狀態（區間、持有格、已實現利潤）存進 store，重啟後可接續。
 
 注意：自製版用市價單，手續費/滑價較高；網格利潤本來就薄，要做真錢建議優先用派網內建網格。
@@ -211,6 +212,11 @@ class GridRunner:
             lines.append("  （目前空手）")
         lines.append(f"投入成本 {invested:.2f} USDT，未實現 {unreal:+.2f}")
         lines.append(f"本網格已實現利潤 {state.get('realized', 0.0):+.2f}")
+        try:
+            total_pnl = self.store.stats_since(0)[1]
+            lines.append(f"歷次累計已實現 {total_pnl:+.2f}")
+        except Exception:  # noqa: BLE001 - 統計失敗不影響狀態顯示
+            pass
         return "\n".join(lines)
 
     def _poll_commands(self) -> None:
@@ -264,6 +270,14 @@ class GridRunner:
         levels = self._levels(lower, upper)
         held = {int(k): v for k, v in state.get("held", {}).items()}
         last = state.get("last_price", price)   # 上一輪價格，用來判斷「穿越」
+
+        # 空手且價格出界：沒有存貨要賣，搬家零成本 → 不必等緩衝，直接重新定位
+        # （緩衝的目的是避免「抱著貨時」在邊界反覆停損重開；空手時不適用）
+        if not held and (price > upper or price < lower) and self.reset_on_breakout:
+            direction = "向上" if price > upper else "向下"
+            self._close_grid(state, price, f"空手出界，{direction}重新定位")
+            self._try_open(price)
+            return
 
         # 風險檢查：跌破下緣 or 未實現虧損超限 → 關閉並重開
         unreal = sum(q * (price - levels[i]) for i, q in held.items())
