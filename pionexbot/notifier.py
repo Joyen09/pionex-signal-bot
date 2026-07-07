@@ -40,9 +40,18 @@ class Notifier:
                  telegram_enabled: bool = False,
                  line_token: str = "", line_user_id: str = "",
                  line_enabled: bool = False,
-                 discord_webhook_url: str = "", discord_enabled: bool = False):
+                 discord_webhook_url: str = "", discord_enabled: bool = False,
+                 discord_bot_token: str = "", discord_channel_id: str = "",
+                 discord_user_id: str = "", discord_bot_enabled: bool = False):
         self.discord_url = discord_webhook_url
         self.discord_enabled = discord_enabled and bool(discord_webhook_url)
+
+        # Discord Bot（雙向）：用 bot token 讀頻道訊息、必要時也能回訊。
+        self.discord_bot_token = discord_bot_token
+        self.discord_channel_id = discord_channel_id
+        self.discord_user_id = discord_user_id
+        self.discord_bot_enabled = discord_bot_enabled and bool(
+            discord_bot_token and discord_channel_id)
 
         self.tg_token = telegram_token
         self.tg_chat = telegram_chat_id
@@ -61,7 +70,9 @@ class Notifier:
         if not push:
             return
         if self.discord_enabled:
-            self._send_discord(message)
+            self._send_discord(message)          # 優先用 Webhook 推播
+        elif self.discord_bot_enabled:
+            self._send_discord_bot(message)      # 沒設 Webhook 時，用 Bot 發訊
         if self.tg_enabled:
             self._send_telegram(message)
         if self.line_enabled and (important or level == "error"):
@@ -96,6 +107,48 @@ class Notifier:
                                resp.status_code, resp.text[:200])
         except requests.RequestException as exc:
             logger.warning("Discord 通知失敗：%s", exc)
+
+    # ---- Discord Bot（雙向）：讀頻道訊息 + 用 Bot 身分回訊 ----
+    DISCORD_API = "https://discord.com/api/v10"
+
+    def get_discord_messages(self, after: Optional[str] = None,
+                             limit: int = 10) -> list:
+        """讀取頻道最近訊息（需 Bot token）。回傳由「舊到新」排序的 message list。
+
+        Discord REST 預設回傳新到舊，這裡反轉方便依序處理；帶 after 時只取該訊息
+        之後（較新）的訊息，用來輪詢新指令。"""
+        if not self.discord_bot_enabled:
+            return []
+        params: dict = {"limit": limit}
+        if after:
+            params["after"] = after
+        try:
+            resp = requests.get(
+                f"{self.DISCORD_API}/channels/{self.discord_channel_id}/messages",
+                headers={"Authorization": f"Bot {self.discord_bot_token}"},
+                params=params, timeout=10)
+            if resp.status_code != 200:
+                logger.warning("Discord 讀取訊息失敗 (HTTP %s)：%s",
+                               resp.status_code, resp.text[:200])
+                return []
+            msgs = resp.json()
+            return list(reversed(msgs)) if isinstance(msgs, list) else []
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning("Discord 讀取訊息失敗：%s", exc)
+            return []
+
+    def _send_discord_bot(self, message: str) -> None:
+        try:
+            resp = requests.post(
+                f"{self.DISCORD_API}/channels/{self.discord_channel_id}/messages",
+                headers={"Authorization": f"Bot {self.discord_bot_token}"},
+                json={"content": message[:1900]},
+                timeout=10)
+            if resp.status_code >= 300:
+                logger.warning("Discord Bot 發訊失敗 (HTTP %s)：%s",
+                               resp.status_code, resp.text[:200])
+        except requests.RequestException as exc:
+            logger.warning("Discord Bot 發訊失敗：%s", exc)
 
     def _send_telegram(self, message: str) -> None:
         try:

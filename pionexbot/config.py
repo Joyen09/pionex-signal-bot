@@ -26,6 +26,9 @@ class Secrets:
     line_channel_token: str = ""
     line_user_id: str = ""
     discord_webhook_url: str = ""
+    discord_bot_token: str = ""
+    discord_channel_id: str = ""
+    discord_user_id: str = ""
     webhook_secret: str = ""
 
     @classmethod
@@ -38,6 +41,9 @@ class Secrets:
             line_channel_token=os.getenv("LINE_CHANNEL_TOKEN", "").strip(),
             line_user_id=os.getenv("LINE_USER_ID", "").strip(),
             discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL", "").strip(),
+            discord_bot_token=os.getenv("DISCORD_BOT_TOKEN", "").strip(),
+            discord_channel_id=os.getenv("DISCORD_CHANNEL_ID", "").strip(),
+            discord_user_id=os.getenv("DISCORD_USER_ID", "").strip(),
             webhook_secret=os.getenv("WEBHOOK_SECRET", "").strip(),
         )
 

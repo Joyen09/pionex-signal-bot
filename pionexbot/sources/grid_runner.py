@@ -4,13 +4,13 @@
 - 在現價附近建立網格（區間均分成數格）。
 - 每輪：價格下跌觸及某格 → 市價買入該格；持有的格子，價格漲到上一格 → 賣出獲利。
 - 風險控管（自動）：
-    * 價格跌破區間下緣（含緩衝）或未實現虧損超過上限 → 平倉關閉整個網格，
+    * 價格跌破區間下緣（含緩衝）或未實現虧損超過上限 → 平倆關閉整個網格，
       然後在「現價」重新開一個新網格繼續交易。
     * 價格突破區間上緣 → 獲利了結後向上重新定位。
     * 空手且價格出界 → 搬家零成本，不等緩衝直接重新定位。
 - 狀態（區間、持有格、已實現利潤）存進 store，重啟後可接續。
 
-注意：自製版用市價單，手續費/滑價較高；網格利潤本來就薄，要做真錢建議優先用派網內建網格。
+注意：自製版用市價單，手續費/滑價較高；網格利潤本來就薜，要做真錢建議優先用派網內建網格。
 """
 from __future__ import annotations
 
@@ -68,6 +68,8 @@ class GridRunner:
         # Telegram 指令輪詢：用「啟動時間」判斷，只回應啟動後傳來的訊息
         self._tg_offset = None
         self._start_ts = time.time()
+        # Discord 指令輪詢：記錄看過的最新訊息 id，只回應啟動後的新訊息
+        self._discord_after = None
 
     # ----- 網格計算 -----
     def _levels(self, lower: float, upper: float) -> list[float]:
@@ -172,8 +174,8 @@ class GridRunner:
         if total_qty > 0:
             res = self.broker.market_sell(self.symbol, total_qty)
             if not res.ok:
-                # 平倉失敗：保留狀態下一輪重試，絕不能弄丟持倉追蹤
-                self._order_fail(f"關閉網格平倉失敗（{total_qty:.8f} BTC）：{res.error}")
+                # 平倆失敗：保留狀態下一輪重試，絕不能弄丟持倆追蹤
+                self._order_fail(f"關閉網格平倆失敗（{total_qty:.8f} BTC）：{res.error}")
                 return
             self.store.record_trade(
                 symbol=self.symbol, side="SELL", base=res.filled_base,
@@ -237,6 +239,31 @@ class GridRunner:
             if self.notifier.tg_chat and chat != str(self.notifier.tg_chat):
                 continue
             self.notifier.send(self.status_text(), important=True)
+
+    def _poll_discord_commands(self) -> None:
+        """讀取 Discord 訊息：收到任何訊息就回覆網格狀態（唯讀查詢）。"""
+        if not self.notifier.discord_bot_enabled:
+            return
+        msgs = self.notifier.get_discord_messages(after=self._discord_after)
+        if not msgs:
+            return
+        # Discord 訊息 id 是遞增雪花碼，記錄最新的當作下次輪詢基準
+        newest = max(int(m["id"]) for m in msgs if str(m.get("id", "")).isdigit())
+        first_poll = self._discord_after is None
+        self._discord_after = str(newest)
+        # 第一次輪詢只設基準，不回覆機器人啟動前的歷史訊息
+        if first_poll:
+            return
+        for m in msgs:
+            # 略過機器人／Webhook 自己發的訊息，否則會對自己的推播無限回覆
+            if m.get("webhook_id") or (m.get("author") or {}).get("bot"):
+                continue
+            # 只回應設定的 Discord 使用者（避免陌生人查你的部位）
+            author = str((m.get("author") or {}).get("id", ""))
+            if self.notifier.discord_user_id and author != str(self.notifier.discord_user_id):
+                continue
+            self.notifier.send(self.status_text(), important=True)
+            break  # 一輪只回一次，避免洗版
 
     def _maybe_daily_summary(self) -> None:
         if not self.summary_enabled:
@@ -344,8 +371,9 @@ class GridRunner:
             f"{self.quote_per_grid} USDT（需約 {need:.0f} USDT）", "info", important=True)
         while self._running:
             try:
-                self._poll_commands()       # 回覆 Telegram 查詢
-                self.run_once()             # 網格交易
+                self._poll_commands()          # 回覆 Telegram 查詢
+                self._poll_discord_commands()  # 回覆 Discord 查詢
+                self.run_once()                # 網格交易
                 self._maybe_daily_summary() # 每日結算
             except Exception as exc:  # noqa: BLE001
                 self.notifier.send(f"⚠️ 網格迴圈錯誤：{exc}", "error")

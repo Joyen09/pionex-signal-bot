@@ -33,6 +33,10 @@ class Bot:
             line_enabled=bool(line.get("enabled", False)),
             discord_webhook_url=cfg.secrets.discord_webhook_url,
             discord_enabled=bool(discord.get("enabled", False)),
+            discord_bot_token=cfg.secrets.discord_bot_token,
+            discord_channel_id=cfg.secrets.discord_channel_id,
+            discord_user_id=cfg.secrets.discord_user_id,
+            discord_bot_enabled=bool(discord.get("enabled", False)),
         )
         self.store = Store("data/bot.db")
         self.risk = RiskManager(cfg.risk)
