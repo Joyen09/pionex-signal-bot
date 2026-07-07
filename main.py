@@ -8,7 +8,7 @@
     python main.py run-strategy    # 啟動內建策略機器人（輪詢 K 線）
     python main.py run-grid        # 啟動自動網格機器人（風險過高自動關閉重開）
     python main.py run-webhook     # 啟動 Webhook 伺服器（接 TradingView 等）
-    python main.py status          # 顯示目前持倉與最近交易
+    python main.py status          # 顯示目前持倆與最近交易
     python main.py buy  --quote 20 # 手動下一筆市價買單
     python main.py sell --base 0.001  # 手動市價賣出
     python main.py backtest        # 用歷史 K 線回測策略
@@ -93,7 +93,7 @@ def cmd_price(bot: Bot) -> int:
 
 def cmd_status(bot: Bot) -> int:
     pos = bot.store.load_position()
-    print(f"持倉：{pos.base} @ 均價 {pos.avg_cost:.2f}")
+    print(f"持倆：{pos.base} @ 均價 {pos.avg_cost:.2f}")
     print(f"當日已實現損益（{pos.day or 'N/A'}）：{pos.realized_pnl_today:.2f}")
     print("\n最近交易：")
     rows = bot.store.recent_trades(10)
@@ -175,7 +175,7 @@ def cmd_dca_backtest(bot: Bot, args) -> int:
     for r in results:
         print(f"{r.label:<10}{r.invested:>6.0f}  {r.final_value:>6.0f}  "
               f"{r.total_return*100:+6.1f}%  {r.avg_cost:>8.0f}  {r.buys:>4}")
-    print("\n判讀：『逢低加碼』的均價通常較低；在波動/下跌段報酬常優於陽春定額。")
+    print("\n判讀：『逆低加碼』的均價通常較低；在波動/下跌段報酬常優於陽春定額。")
     return 0
 
 
@@ -297,7 +297,7 @@ def cmd_optimize(bot: Bot, args) -> int:
         print(f"❌ K 線太少（{len(klines)}），無法做 walk-forward")
         return 1
 
-    # 用「滿倉單一部位」評估，數字才反映策略真實複利績效
+    # 用「滿倆單一部位」評估，數字才反映策略真實複利績效
     cash = args.cash or 1000.0
     folds = walk_forward(name, klines, cfg.symbol, folds=4,
                          start_cash=cash, quote_per_trade=cash)
@@ -422,13 +422,14 @@ def cmd_symbol_info(bot: Bot, args) -> int:
 
 def cmd_notify_test(bot: Bot) -> int:
     n = bot.notifier
-    print(f"Telegram 啟用：{n.tg_enabled}　LINE 啟用：{n.line_enabled}")
-    if not (n.tg_enabled or n.line_enabled):
-        print("⚠ 兩種通知都未啟用。請在 config.yaml 設 enabled: true，並在 .env 填好金鑰。")
+    print(f"Discord 啟用：{n.discord_enabled}　Telegram 啟用：{n.tg_enabled}　"
+          f"LINE 啟用：{n.line_enabled}")
+    if not (n.discord_enabled or n.tg_enabled or n.line_enabled):
+        print("⚠ 三種通知都未啟用。請在 config.yaml 設 enabled: true，並在 .env 填好金鑰。")
         return 1
     n.send("🔔 派網訊號機器人通知測試：如果你收到這則訊息，代表通知設定成功！",
            "info", important=True)
-    print("已送出測試通知，請查看你的 LINE / Telegram。")
+    print("已送出測試通知，請查看你的 Discord / LINE / Telegram。")
     return 0
 
 
