@@ -248,7 +248,6 @@ def cmd_backtest_sweep(bot: Bot, args) -> int:
         quote_per_trade=float(cfg.trading.get("quote_per_trade", 100)),
     )
 
-    # 依報酬排序印表
     by_return = sorted(rows, key=lambda r: r.result.total_return, reverse=True)
     print(f"\n策略={name}  K線={len(klines)}  "
           f"買入持有報酬={by_return[0].result.buy_hold_return * 100:+.2f}%")
@@ -297,7 +296,6 @@ def cmd_optimize(bot: Bot, args) -> int:
         print(f"❌ K 線太少（{len(klines)}），無法做 walk-forward")
         return 1
 
-    # 用「滿倆單一部位」評估，數字才反映策略真實複利績效
     cash = args.cash or 1000.0
     folds = walk_forward(name, klines, cfg.symbol, folds=4,
                          start_cash=cash, quote_per_trade=cash)
@@ -350,7 +348,6 @@ def cmd_grid_backtest(bot: Bot, args) -> int:
         return 1
 
     first_close = _ohlc(klines[0])[2]
-    # 未指定區間時，預設用起始價 ±20% 當網格範圍（事前可知的合理選擇）
     lower = args.lower or first_close * 0.8
     upper = args.upper or first_close * 1.2
     grids = args.grids or 20
@@ -413,7 +410,6 @@ def cmd_symbol_info(bot: Bot, args) -> int:
     print(f"=== {symbol} 交易規格 ===")
     for k, v in info.items():
         print(f"  {k}: {v}")
-    # 常見的最低金額欄位
     for key in ("minAmount", "minTradeSize", "minTradeDumping", "minValue"):
         if key in info:
             print(f"\n➡ 最低下單相關：{key} = {info[key]}")
@@ -422,9 +418,9 @@ def cmd_symbol_info(bot: Bot, args) -> int:
 
 def cmd_notify_test(bot: Bot) -> int:
     n = bot.notifier
-    print(f"Discord 啟用：{n.discord_enabled}　Telegram 啟用：{n.tg_enabled}　"
-          f"LINE 啟用：{n.line_enabled}")
-    if not (n.discord_enabled or n.tg_enabled or n.line_enabled):
+    print(f"Discord 推播：{n.discord_enabled}　Discord 雙向：{n.discord_bot_enabled}　"
+          f"Telegram 啟用：{n.tg_enabled}　LINE 啟用：{n.line_enabled}")
+    if not (n.discord_enabled or n.discord_bot_enabled or n.tg_enabled or n.line_enabled):
         print("⚠ 三種通知都未啟用。請在 config.yaml 設 enabled: true，並在 .env 填好金鑰。")
         return 1
     n.send("🔔 派網訊號機器人通知測試：如果你收到這則訊息，代表通知設定成功！",
@@ -438,7 +434,6 @@ def cmd_manual(bot: Bot, action: Action, quote: float | None, base: float | None
                  quote_amount=quote, base_size=base, reason="手動下單")
     result = bot.executor.handle(sig)
     print(result or "未成交（被風控擋下或 HOLD）")
-    # 若實盤成交量解析為 0，印出原始訂單資料以便診斷欄位名稱
     if result and result.ok and not result.simulated and result.filled_base == 0:
         print("⚠ 成交量解析為 0，原始訂單資料（請貼給我對照欄位）：")
         print(result.raw)

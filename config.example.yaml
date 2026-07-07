@@ -97,9 +97,10 @@ webhook:
 
 notify:
   discord:
-    enabled: false      # 設 true 並在 .env 填 DISCORD_WEBHOOK_URL 後啟用
-    # 最推薦：在頻道設定 → 整合 → 建立 Webhook，複製網址即可，設定最簡單。
-    # 注意：Webhook 是單向推播，不能像 Telegram 傳訊息回來查詢狀態。
+    enabled: false      # 設 true 後啟用 Discord（推播 + 選配雙向）
+    # 推播：在 .env 填 DISCORD_WEBHOOK_URL（頻道設定 → 整合 → 建立 Webhook，最簡單）。
+    # 雙向查詢：另在 .env 填 DISCORD_BOT_TOKEN + DISCORD_CHANNEL_ID，就能在頻道
+    #   打字查網格狀態（唯讀）。兩者可只設一個，也可都設。
   telegram:
     enabled: false      # 設 true 並在 .env 填 token/chat_id 後啟用
   line:
