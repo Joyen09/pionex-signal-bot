@@ -25,8 +25,8 @@ risk:
   allow_short: false           # 現貨不可做空；保留給未來合約
   # 停損/停利建議值（順勢策略：留停損當安全網、關掉停利讓獲利奔跑）
   # 真正最佳值請用真實資料跑：python main.py backtest-sweep
-  stop_loss_pct: 0.05          # 停損：虧損達 5% 自動平倉（0 = 關閉）
-  take_profit_pct: 0           # 停利：關閉，靠策略的死亡交叉出場（0 = 關閉）
+  stop_loss_pct: 0.05          # 停損：虧損達 5% 自動平倆（0 = 關閉）
+  take_profit_pct: 0           # 停利：關閉，靠策略的死交叉出場（0 = 關閉）
 
 strategy:
   # 可用策略：ma_cross / rsi / macd / bollinger
@@ -60,7 +60,7 @@ grid:                   # 自動網格機器人 (python main.py run-grid)
   reset_on_breakout: true   # 突破/跌破區間時自動關閉並重開新網格
   max_loss_quote: 0     # 未實現虧損達此金額(USDT)就關閉重開；0 = 只靠區間判斷
 
-  # ① ATR 動態區間：依市場波動自動決定網格寬窄（市場越瘋格子越寬）
+  # ① ATR 動態區間：依市場波動自動決定網格寬稄（市場越瘋格子越寬）
   range_mode: atr       # fixed = 用 range_pct；atr = 用 ATR 動態
   atr_period: 14
   atr_mult: 6           # 半區間 = atr_mult × ATR（越大區間越寬、越不易突破）
@@ -84,7 +84,7 @@ dca:                    # 智慧 DCA 定投 (python main.py run-dca)，只買不
   ref_period: 20        # 參考均線期數（如 20 日均線）
   dip_step: 0.05        # 每跌離均線 5%，加碼一檔
   mult_per_step: 0.5    # 每檔多買 0.5 倍
-  max_mult: 3.0         # 逢低最多買到基本額的 3 倍
+  max_mult: 3.0         # 逆低最多買到基本額的 3 倍
   take_profit_pct: 0    # 帳面獲利達此 % 自動停利（0=關閉；如 0.5=+50% 就賣）
   take_profit_fraction: 1.0  # 停利時賣出比例（1.0=全賣後重新定投；0.5=賣一半續抱）
   poll_seconds: 30
@@ -96,6 +96,10 @@ webhook:
   # 共享密鑰從環境變數 WEBHOOK_SECRET 讀取（見 .env）
 
 notify:
+  discord:
+    enabled: false      # 設 true 並在 .env 填 DISCORD_WEBHOOK_URL 後啟用
+    # 最推薦：在頻道設定 → 整合 → 建立 Webhook，複製網址即可，設定最簡單。
+    # 注意：Webhook 是單向推播，不能像 Telegram 傳訊息回來查詢狀態。
   telegram:
     enabled: false      # 設 true 並在 .env 填 token/chat_id 後啟用
   line:
