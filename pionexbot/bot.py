@@ -23,6 +23,7 @@ class Bot:
         )
         tg = cfg.notify.get("telegram", {})
         line = cfg.notify.get("line", {})
+        discord = cfg.notify.get("discord", {})
         self.notifier = Notifier(
             telegram_token=cfg.secrets.telegram_bot_token,
             telegram_chat_id=cfg.secrets.telegram_chat_id,
@@ -30,6 +31,8 @@ class Bot:
             line_token=cfg.secrets.line_channel_token,
             line_user_id=cfg.secrets.line_user_id,
             line_enabled=bool(line.get("enabled", False)),
+            discord_webhook_url=cfg.secrets.discord_webhook_url,
+            discord_enabled=bool(discord.get("enabled", False)),
         )
         self.store = Store("data/bot.db")
         self.risk = RiskManager(cfg.risk)

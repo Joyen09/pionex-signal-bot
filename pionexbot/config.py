@@ -25,6 +25,7 @@ class Secrets:
     telegram_chat_id: str = ""
     line_channel_token: str = ""
     line_user_id: str = ""
+    discord_webhook_url: str = ""
     webhook_secret: str = ""
 
     @classmethod
@@ -36,6 +37,7 @@ class Secrets:
             telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
             line_channel_token=os.getenv("LINE_CHANNEL_TOKEN", "").strip(),
             line_user_id=os.getenv("LINE_USER_ID", "").strip(),
+            discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL", "").strip(),
             webhook_secret=os.getenv("WEBHOOK_SECRET", "").strip(),
         )
 
