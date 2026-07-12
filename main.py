@@ -179,11 +179,37 @@ def cmd_dca_backtest(bot: Bot, args) -> int:
     return 0
 
 
+def _signal_status_text(bot: Bot) -> str:
+    """訊號機器人（策略/webhook）目前狀態：持倉、出場計畫、累計損益。"""
+    mode = "實盤" if bot.cfg.is_live else "紙上"
+    pos = bot.store.load_position()
+    try:
+        price = bot.broker.get_price(bot.cfg.symbol)
+    except Exception:  # noqa: BLE001
+        price = 0.0
+    lines = [f"🧪 訊號機器人狀態（{mode}｜{bot.cfg.symbol}）",
+             f"現價 {price:.2f}",
+             f"持倉 {pos.base:.8f} @ 均價 {pos.avg_cost:.2f}"]
+    if pos.base > 0 and price:
+        lines.append(f"未實現 {(price - pos.avg_cost) * pos.base:+.2f}")
+    plan = bot.store.load_plan()
+    if plan:
+        lines.append(f"出場計畫：SL {float(plan['stop_loss']):.2f}"
+                     f"（進場 {float(plan['entry']):.2f}）")
+        for t in plan.get("tps", []):
+            mark = "✅" if t["filled"] else "⏳"
+            lines.append(f"  {mark} TP {t['price']} × {t['fraction']}")
+    count, pnl = bot.store.stats_since(0)
+    lines.append(f"累計成交 {count} 筆，已實現 {pnl:+.2f}")
+    return "\n".join(lines)
+
+
 def _plan_monitor_loop(bot: Bot, poll_seconds: int = 20) -> None:
-    """Webhook 模式的出場計畫監控：TP 觸價每輪查，SL 於新收盤 K 檢查。"""
+    """Webhook 模式背景監控：出場計畫（TP 觸價 / SL 收盤觸發）＋ Discord 查詢。"""
     import time as _time
     interval = bot.cfg.strategy.get("interval", "5M")
     last_candle = None
+    discord_after = None
     while True:
         try:
             plan = bot.store.load_plan()
@@ -199,6 +225,25 @@ def _plan_monitor_loop(bot: Bot, poll_seconds: int = 20) -> None:
                         c = k.get("close") if isinstance(k, dict) else k[4]
                         candle_close = float(c)
                 bot.executor.check_plan(price, candle_close=candle_close)
+
+            # Discord 打字查詢（唯讀，與 grid_runner 同一套過濾規則）
+            if bot.notifier.discord_bot_enabled:
+                msgs = bot.notifier.get_discord_messages(after=discord_after)
+                if msgs:
+                    newest = max(int(m["id"]) for m in msgs
+                                 if str(m.get("id", "")).isdigit())
+                    first_poll = discord_after is None
+                    discord_after = str(newest)
+                    if not first_poll:
+                        for m in msgs:
+                            if m.get("webhook_id") or (m.get("author") or {}).get("bot"):
+                                continue
+                            author = str((m.get("author") or {}).get("id", ""))
+                            uid = bot.notifier.discord_user_id
+                            if uid and author != str(uid):
+                                continue
+                            bot.notifier.send(_signal_status_text(bot), important=True)
+                            break
         except Exception as exc:  # noqa: BLE001 - 監控錯誤不該讓伺服器倒
             bot.notifier.send(f"⚠️ 出場計畫監控錯誤：{exc}", "warning")
         _time.sleep(poll_seconds)
