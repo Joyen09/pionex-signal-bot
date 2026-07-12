@@ -490,6 +490,37 @@ def cmd_symbol_info(bot: Bot, args) -> int:
     return 0
 
 
+def cmd_smc_plot(bot: Bot, args) -> int:
+    """SMC 視覺化驗收（規格 §5.1）：K 線 + swing/BOS/MSS/區域/sweep/killzone。"""
+    try:
+        from pionexbot.smc.plot import build_figure
+        import plotly  # noqa: F401
+    except ImportError:
+        print("❌ 需要 plotly：pip install plotly")
+        return 1
+
+    symbol = (args.symbol or bot.cfg.symbol).upper()
+    interval = args.interval or "15M"
+    limit = args.limit or 1000
+    out = args.out or "smc.html"
+
+    print(f"抓取 {symbol} {interval} 共 {limit} 根 K 線 ...")
+    try:
+        klines = bot.client.get_klines_history(symbol, interval, total=limit)
+    except PionexError as exc:
+        print(f"❌ 抓 K 線失敗：{exc}")
+        return 1
+    if len(klines) < 50:
+        print(f"❌ K 線太少（{len(klines)}）")
+        return 1
+
+    fig = build_figure(klines, bot.cfg.raw.get("smc", {}))
+    fig.write_html(out)
+    print(f"✅ 已輸出 {out}（{len(klines)} 根）。用瀏覽器打開，"
+          "對照講義範例圖人工驗收偵測結果。")
+    return 0
+
+
 def cmd_notify_test(bot: Bot) -> int:
     n = bot.notifier
     print(f"Discord 推播：{n.discord_enabled}　Discord 雙向：{n.discord_bot_enabled}　"
@@ -522,7 +553,8 @@ def main(argv: list[str] | None = None) -> int:
                                  "buy", "sell",
                                  "backtest", "backtest-sweep", "optimize",
                                  "grid-backtest", "grid-compare",
-                                 "dca-backtest", "symbol-info", "notify-test"])
+                                 "dca-backtest", "symbol-info", "notify-test",
+                                 "smc-plot"])
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--quote", type=float, help="買入金額（報價幣）")
     parser.add_argument("--base", type=float, help="賣出數量（基礎幣）")
@@ -534,6 +566,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--upper", type=float, help="網格上緣價格")
     parser.add_argument("--grids", type=int, help="網格數量")
     parser.add_argument("--symbol", help="覆寫交易對（如 ETH_USDT），用於回測掃描")
+    parser.add_argument("--out", help="smc-plot 輸出的 HTML 檔名（預設 smc.html）")
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -571,6 +604,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_symbol_info(bot, args)
         if args.command == "notify-test":
             return cmd_notify_test(bot)
+        if args.command == "smc-plot":
+            return cmd_smc_plot(bot, args)
         if args.command == "buy":
             return cmd_manual(bot, Action.BUY, args.quote or
                               float(cfg.trading.get("quote_per_trade", 20)), None)

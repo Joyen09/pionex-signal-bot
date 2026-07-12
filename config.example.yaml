@@ -100,6 +100,29 @@ dca:                    # 智慧 DCA 定投 (python main.py run-dca)，只買不
   take_profit_fraction: 1.0  # 停利時賣出比例（1.0=全賣後重新定投；0.5=賣一半續抱）
   poll_seconds: 30
 
+smc:                    # SMC 偵測模組（Smart Money Concepts）參數
+  max_bars: 1500        # 每次收盤重算最近幾根（先求對、再求快）
+  swing:
+    left: 3             # swing 分形左側根數
+    right: 3            # 右側根數（右側收盤後才「確認」，防未來函數）
+  structure:
+    break_mode: close   # close = 收盤突破才算 | wick = 影線碰到就算
+  liquidity:
+    eq_tolerance_pct: 0.001   # 等高/等低合併容忍度（0.1%）
+    sweep_mode: wick          # wick = 單根收針 | reclaim = 收盤收回
+    max_reclaim_bars: 3
+  fvg:
+    min_size_pct: 0.0005      # 缺口最小寬度（佔現價比例），太小的雜訊不算
+  ob:
+    zone: full_range          # full_range = 整根 K | body = 只算實體
+  fib:
+    ote: [0.62, 0.79]         # OTE 進場帶（0 錨定 range 高點、1 錨定低點）
+  sessions:
+    tz: "America/New_York"    # IANA 時區，夏冬令自動處理
+    asia:    ["20:00", "00:00"]
+    london:  ["03:00", "06:00"]
+    newyork: ["09:00", "11:00"]
+
 webhook:
   host: 0.0.0.0
   port: 8080

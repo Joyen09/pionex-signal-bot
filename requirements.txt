@@ -5,3 +5,4 @@ python-dotenv>=1.0.0     # 載入 .env 內的 API 金鑰等機密
 fastapi>=0.110.0         # Webhook 接收伺服器 (TradingView / 通用)
 uvicorn>=0.29.0          # 執行 FastAPI 的 ASGI server
 pandas>=2.0.0            # 技術指標計算 (內建策略)
+plotly>=5.20.0           # smc-plot 視覺化驗收工具（K 線 + SMC 事件/區域）
