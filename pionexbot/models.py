@@ -24,6 +24,16 @@ class OrderType(str, Enum):
 
 
 @dataclass
+class TakeProfit:
+    """一段停利：price 觸價即賣出「原始倉位 × fraction」。
+
+    同一 Signal 內所有 fraction 總和必須 <= 1。"""
+
+    price: float
+    fraction: float
+
+
+@dataclass
 class Signal:
     """一個標準化的交易訊號，不論來自策略或 webhook 都轉成這個。"""
 
@@ -35,6 +45,11 @@ class Signal:
     price: Optional[float] = None          # 限價單參考價（市價單可省略）
     reason: str = ""                  # 人類可讀的觸發原因
     raw: dict[str, Any] = field(default_factory=dict)  # 原始 payload
+    # --- 以止損決定倉位（皆為選填；未帶時走原本 quote_per_trade 流程）---
+    stop_loss: Optional[float] = None            # 止損價（做多需低於進場價）
+    take_profits: Optional[list[TakeProfit]] = None  # 多段停利
+    risk_quote: Optional[float] = None           # 本筆願意虧的 USDT
+    tags: Optional[dict[str, Any]] = None        # 策略 setup 資訊，寫入 SQLite 供回測分析
 
     def __str__(self) -> str:
         bits = [f"{self.action.value} {self.symbol}"]
@@ -42,6 +57,11 @@ class Signal:
             bits.append(f"金額={self.quote_amount}")
         if self.base_size is not None:
             bits.append(f"數量={self.base_size}")
+        if self.stop_loss is not None:
+            bits.append(f"SL={self.stop_loss}")
+        if self.take_profits:
+            bits.append("TP=" + "/".join(f"{tp.price}x{tp.fraction}"
+                                         for tp in self.take_profits))
         if self.reason:
             bits.append(f"({self.reason})")
         bits.append(f"來源={self.source}")

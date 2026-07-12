@@ -50,9 +50,33 @@ class StrategyRunner:
             return k[0]
         return None
 
+    @staticmethod
+    def _candle_close(k):
+        """盡量取出 K 線收盤價。"""
+        if isinstance(k, dict):
+            for key in ("close", "c"):
+                if key in k:
+                    return float(k[key])
+        elif isinstance(k, (list, tuple)) and len(k) >= 5:
+            return float(k[4])
+        return None
+
+    def _check_plan(self) -> None:
+        """出場計畫（SL/多段 TP）：每輪用現價檢查 TP 觸價。SL 收盤觸發在 run_once。"""
+        if not self.executor.store.load_plan():
+            return
+        try:
+            price = self.executor.broker.get_price(self.symbol)
+        except Exception:  # noqa: BLE001
+            return
+        self.executor.check_plan(price)
+
     def _check_exit(self) -> None:
-        """停損 / 停利：持倉時每輪檢查現價，達標就平倉。"""
+        """停損 / 停利（百分比舊制）：持倉時每輪檢查現價，達標就平倉。
+        有出場計畫（訊號自帶 SL/TP）時交給計畫管理，跳過舊制。"""
         if not (self.stop_loss_pct or self.take_profit_pct):
+            return
+        if self.executor.store.load_plan():
             return
         pos = self.executor.store.load_position()
         if pos.base <= 0 or pos.avg_cost <= 0:
@@ -89,6 +113,11 @@ class StrategyRunner:
         if candle_time is not None and candle_time == self._last_candle_time:
             return
         self._last_candle_time = candle_time
+
+        # 新收盤 K → 出場計畫的 SL 收盤觸發檢查（close-based）
+        close_px = self._candle_close(closed[-1])
+        if close_px is not None and self.executor.store.load_plan():
+            self.executor.check_plan(close_px, candle_close=close_px)
 
         signal = self.strategy.evaluate(closed, self.symbol)
         if signal is None:
@@ -149,7 +178,8 @@ class StrategyRunner:
             "info", important=True)
         while self._running:
             try:
-                self._check_exit()      # 先檢查停損/停利（每輪都查）
+                self._check_plan()      # 出場計畫：TP 觸價（每輪都查）
+                self._check_exit()      # 舊制百分比停損/停利（無計畫時）
                 self.run_once()
                 self._maybe_daily_summary()
             except Exception as exc:  # noqa: BLE001 - 單次錯誤不該讓機器人停止

@@ -4,6 +4,12 @@ TradingView 警報訊息範例（在警報的 Message 欄位填 JSON）：
     {"secret": "你的密鑰", "action": "BUY", "symbol": "BTC_USDT", "quote_amount": 20}
     {"secret": "你的密鑰", "action": "SELL", "symbol": "BTC_USDT"}
 
+進階：帶止損 / 多段停利（以止損決定倉位，見 risk.py）：
+    {"secret": "...", "action": "BUY", "symbol": "BTC_USDT",
+     "sl": 64000,
+     "tps": [{"price": 68000, "fraction": 0.5}, {"price": 70000, "fraction": 0.5}],
+     "risk_quote": 50}
+
 也接受 TradingView 內建的 {{strategy.order.action}} 形式：
     {"secret": "...", "action": "{{strategy.order.action}}", "symbol": "{{ticker}}"}
 """
@@ -17,8 +23,40 @@ from fastapi.responses import JSONResponse
 
 from ..config import Config
 from ..executor import Executor
-from ..models import Action, Signal
+from ..models import Action, Signal, TakeProfit
 from ..notifier import Notifier
+
+
+def parse_plan_fields(payload: dict) -> tuple[Optional[float],
+                                              Optional[list[TakeProfit]],
+                                              Optional[float]]:
+    """解析並驗證 sl / tps / risk_quote。不合法時 raise ValueError。
+
+    價格與進場方向的關係（SL 需低於進場價）由風控在下單當下用市價驗證。"""
+    sl = _to_float(payload.get("sl"))
+    risk_quote = _to_float(payload.get("risk_quote"))
+    if risk_quote is not None and risk_quote <= 0:
+        raise ValueError(f"risk_quote 必須為正數：{risk_quote}")
+
+    tps_raw = payload.get("tps")
+    tps: Optional[list[TakeProfit]] = None
+    if tps_raw is not None:
+        if not isinstance(tps_raw, list) or not tps_raw:
+            raise ValueError("tps 必須是非空陣列")
+        tps = []
+        total = 0.0
+        for item in tps_raw:
+            price = _to_float(item.get("price")) if isinstance(item, dict) else None
+            fraction = _to_float(item.get("fraction")) if isinstance(item, dict) else None
+            if not price or price <= 0 or not fraction or fraction <= 0:
+                raise ValueError(f"停利段不合法：{item!r}")
+            if sl is not None and price <= sl:
+                raise ValueError(f"停利價 {price} 必須高於止損 {sl}")
+            total += fraction
+            tps.append(TakeProfit(price=price, fraction=fraction))
+        if total > 1.0 + 1e-9:
+            raise ValueError(f"停利比例總和 {total:.2f} 超過 1")
+    return sl, tps, risk_quote
 
 
 def _parse_action(value: Any) -> Optional[Action]:
@@ -68,6 +106,12 @@ def build_app(cfg: Config, executor: Executor, notifier: Notifier) -> FastAPI:
                 status_code=400)
 
         symbol = str(payload.get("symbol") or default_symbol).upper()
+        try:
+            sl, tps, risk_quote = parse_plan_fields(payload)
+        except ValueError as exc:
+            notifier.send(f"Webhook SL/TP 欄位不合法：{exc}", "warning")
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
         signal = Signal(
             action=action, symbol=symbol, source="webhook:tradingview",
             quote_amount=_to_float(payload.get("quote_amount")),
@@ -75,8 +119,10 @@ def build_app(cfg: Config, executor: Executor, notifier: Notifier) -> FastAPI:
             price=_to_float(payload.get("price")),
             reason=str(payload.get("reason", "webhook 訊號")),
             raw=payload,
+            stop_loss=sl, take_profits=tps, risk_quote=risk_quote,
         )
-        if action == Action.BUY and signal.quote_amount is None:
+        # 帶止損時倉位由風控計算，不必補預設金額
+        if action == Action.BUY and signal.quote_amount is None and sl is None:
             signal.quote_amount = default_quote
 
         notifier.send(f"📨 收到 Webhook 訊號：{signal}", "info")

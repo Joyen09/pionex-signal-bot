@@ -1,0 +1,11 @@
+# 消息封鎖日曆範本。複製為 data/news_calendar.yaml 後自行維護。
+# 事件時間前後的視窗內，機器人會拒絕「新進場」（既有部位與掛單不動）。
+# time_utc 用 ISO 格式（UTC）；台灣時間 = UTC+8，例如台灣 20:30 = UTC 12:30。
+- name: "US CPI"
+  time_utc: "2026-07-15T12:30:00Z"
+  block_before_min: 30
+  block_after_min: 30
+- name: "FOMC 利率決議"
+  time_utc: "2026-07-29T18:00:00Z"
+  block_before_min: 60
+  block_after_min: 60

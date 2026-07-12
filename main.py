@@ -179,12 +179,41 @@ def cmd_dca_backtest(bot: Bot, args) -> int:
     return 0
 
 
+def _plan_monitor_loop(bot: Bot, poll_seconds: int = 20) -> None:
+    """Webhook 模式的出場計畫監控：TP 觸價每輪查，SL 於新收盤 K 檢查。"""
+    import time as _time
+    interval = bot.cfg.strategy.get("interval", "5M")
+    last_candle = None
+    while True:
+        try:
+            plan = bot.store.load_plan()
+            if plan:
+                price = bot.broker.get_price(bot.cfg.symbol)
+                candle_close = None
+                kl = bot.client.get_klines(bot.cfg.symbol, interval, limit=3)
+                if len(kl) >= 2:
+                    k = kl[-2]  # 最後一根已收盤
+                    t = k.get("time") if isinstance(k, dict) else k[0]
+                    if t != last_candle:
+                        last_candle = t
+                        c = k.get("close") if isinstance(k, dict) else k[4]
+                        candle_close = float(c)
+                bot.executor.check_plan(price, candle_close=candle_close)
+        except Exception as exc:  # noqa: BLE001 - 監控錯誤不該讓伺服器倒
+            bot.notifier.send(f"⚠️ 出場計畫監控錯誤：{exc}", "warning")
+        _time.sleep(poll_seconds)
+
+
 def cmd_run_webhook(bot: Bot) -> int:
+    import threading
+
     import uvicorn
     from pionexbot.sources.webhook import build_app
     app = build_app(bot.cfg, bot.executor, bot.notifier)
     wh = bot.cfg.webhook
     mode = "實盤" if bot.cfg.is_live else "紙上"
+    # 背景監控 SL/TP（帶止損的訊號進場後，出場由這條執行緒盯）
+    threading.Thread(target=_plan_monitor_loop, args=(bot,), daemon=True).start()
     print(f"🤖 Webhook 伺服器啟動（{mode}模式）"
           f" http://{wh.get('host','0.0.0.0')}:{wh.get('port',8080)}{wh.get('path','/webhook')}")
     uvicorn.run(app, host=wh.get("host", "0.0.0.0"), port=int(wh.get("port", 8080)))
