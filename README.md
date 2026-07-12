@@ -77,6 +77,9 @@ python main.py backtest --strategy macd --interval 1H --limit 1000
 
 # 掃描最佳停損 / 停利
 python main.py backtest-sweep --interval 5M --limit 1000
+
+# SMC 偵測視覺化驗收（swing / BOS / MSS / OB / FVG / sweep / killzone）
+python main.py smc-plot --interval 15M --limit 1000 --out smc.html
 ```
 
 ### 內建策略
