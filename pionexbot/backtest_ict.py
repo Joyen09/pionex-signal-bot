@@ -50,12 +50,22 @@ class IctReport:
     bars: int = 0
     setups_placed: int = 0
     setups_expired: int = 0
+    funnel: dict = field(default_factory=dict)
+
+    def _funnel_text(self) -> str:
+        if not self.funnel:
+            return ""
+        total = sum(self.funnel.values())
+        rows = sorted(self.funnel.items(), key=lambda kv: -kv[1])
+        seg = "\n".join(f"  {k}：{v}（{v/total*100:.0f}%）" for k, v in rows)
+        return f"\n漏斗診斷（評估 {total} 次，各關卡擋掉次數）：\n{seg}"
 
     def summary(self) -> str:
         closed = [t for t in self.trades if t.closed]
         if not closed:
             return (f"K 線 {self.bars} 根，掛單 {self.setups_placed} 次"
-                    f"（{self.setups_expired} 次失效撤單），無成交。")
+                    f"（{self.setups_expired} 次失效撤單），無成交。"
+                    + self._funnel_text())
         rs = [t.r for t in closed]
         wins = [r for r in rs if r > 0]
         losses = [r for r in rs if r <= 0]
@@ -201,7 +211,7 @@ def backtest_ict2022(entry_k, trigger_k, htf_k,
             ts = ohlc.t(k)
             kz = clock.in_killzone(float(ts)) if ts is not None else None
             s = find_setup(htf[-HTF_WINDOW:], trig[-TRIGGER_WINDOW:],
-                           p, smc_cfg, killzone=kz)
+                           p, smc_cfg, killzone=kz, funnel=rep.funnel)
             if s is not None and s.key not in dead_keys:
                 pending = s
                 pending_bar = i

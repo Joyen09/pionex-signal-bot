@@ -65,8 +65,16 @@ class Setup:
 
 def find_setup(htf_klines, trigger_klines, cfg: dict,
                smc_cfg: Optional[dict] = None,
-               killzone: Optional[str] = None) -> Optional[Setup]:
-    """依八步流水線評估；不成立回 None。輸入一律為「已收盤」K 線。"""
+               killzone: Optional[str] = None,
+               funnel: Optional[dict] = None) -> Optional[Setup]:
+    """依八步流水線評估；不成立回 None。輸入一律為「已收盤」K 線。
+
+    funnel：選填的計數器 dict——每一關擋掉時 +1，用來診斷
+    「為什麼都沒 setup」（哪一關太嚴一目了然）。"""
+    def _block(reason: str) -> None:
+        if funnel is not None:
+            funnel[reason] = funnel.get(reason, 0) + 1
+
     p = {**DEFAULTS, **(cfg or {})}
     sc = smc_cfg or {}
     swing_cfg = sc.get("swing", {})
@@ -74,15 +82,18 @@ def find_setup(htf_klines, trigger_klines, cfg: dict,
     right = int(swing_cfg.get("right", 3))
 
     if len(trigger_klines) < 30 or len(htf_klines) < 20:
+        _block("資料不足")
         return None
 
     # 8) killzone 過濾（entry 當下時段由呼叫端判好傳入）
     if p["killzone_filter"] and killzone is None:
+        _block("killzone 外")
         return None
 
     # 1) HTF 偏向：結構 UP 才做多
     st_h = structure.detect_structure(htf_klines, left=left, right=right)
     if not st_h.trend or st_h.trend[-1] != Direction.UP:
+        _block("HTF 非多頭")
         return None
 
     # 2) 近期 sweep 了 SELL_SIDE 池
@@ -99,6 +110,7 @@ def find_setup(htf_klines, trigger_klines, cfg: dict,
     recent = [s for s in sweeps
               if s.pool.side == PoolSide.SELL_SIDE and s.confirmed_at >= horizon]
     if not recent:
+        _block("近期無 SELL_SIDE sweep")
         return None
     sweep = max(recent, key=lambda s: s.confirmed_at)
 
@@ -108,12 +120,14 @@ def find_setup(htf_klines, trigger_klines, cfg: dict,
                 if e.kind == StructureKind.MSS and e.direction == Direction.UP
                 and e.confirmed_at >= sweep.confirmed_at]
     if not mss_list:
+        _block("sweep 後無看漲 MSS")
         return None
     mss = mss_list[-1]
 
     # 7) 反向 MSS 出現在其後 → 本 setup 已失效
     if any(e.kind == StructureKind.MSS and e.direction == Direction.DOWN
            and e.confirmed_at > mss.confirmed_at for e in st_t.events):
+        _block("已出現反向 MSS")
         return None
 
     # 4) dealing range 與 Discount 半區
@@ -126,6 +140,7 @@ def find_setup(htf_klines, trigger_klines, cfg: dict,
     else:  # 推進段還沒做出已確認 swing high → 用段內最高價保守代替
         range_high = max(ohlc.h(k) for k in trigger_klines[mss.confirmed_at:])
     if range_high <= range_low:
+        _block("range 無效")
         return None
     ceiling = zones.discount_ceiling(range_high, range_low)
     ote_lo, ote_hi = zones.ote_band(range_high, range_low,
@@ -144,6 +159,7 @@ def find_setup(htf_klines, trigger_klines, cfg: dict,
              and z.created_at >= sweep.confirmed_at
              and z.ce <= ceiling]
     if not cands:
+        _block("Discount 無可用區域")
         return None
     def in_ote(z) -> bool:
         return ote_lo <= z.ce <= ote_hi
@@ -155,6 +171,7 @@ def find_setup(htf_klines, trigger_klines, cfg: dict,
     # 5) SL
     sl = min(sweep.wick_extreme, zone.bottom) * (1 - float(p["sl_buffer_pct"]))
     if sl >= entry:
+        _block("SL 高於進場價")
         return None
 
     # 6) TP：entry 上方最近的 BUY_SIDE 池 1–3 個 + RR 檢查
@@ -164,15 +181,18 @@ def find_setup(htf_klines, trigger_klines, cfg: dict,
     alloc = list(p["tp_allocation"])
     targets = targets[:len(alloc)]
     if not targets:
+        _block("上方無 TP 池")
         return None
     rr = (targets[0] - entry) / (entry - sl)
     if rr < float(p["min_rr_tp1"]):
+        _block("RR 不足")
         return None
     # 比例重新正規化到實際 TP 數量（少於 3 個時最後一段吃剩餘）
     alloc = alloc[:len(targets)]
     alloc[-1] = round(1.0 - sum(alloc[:-1]), 10)
     tps = [TakeProfit(price=t, fraction=f) for t, f in zip(targets, alloc)]
 
+    _block("setup 成立")
     return Setup(
         limit_price=entry, stop_loss=sl, take_profits=tps,
         range_high=range_high, sweep_at=sweep.confirmed_at,
