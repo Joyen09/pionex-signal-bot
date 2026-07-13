@@ -117,6 +117,35 @@ def test_find_setup_respects_killzone_filter():
                       killzone=None) is None, "時段外不掛新單"
 
 
+def test_require_ote_hard_condition_picks_ote_zone():
+    """require_ote=true：CE 不在 OTE 帶的區域直接淘汰。
+    劇本中 BPR（CE=99.75）在 OTE 帶外、FVG（CE=99.2）在帶內——
+    預設選優先權高的 BPR，開硬條件後應改選 FVG。"""
+    smc_cfg = {"swing": {"left": 1, "right": 1}, "fvg": {"min_size_pct": 0.0001}}
+    base = {"min_rr_tp1": 0.5, "killzone_filter": False}
+    s0 = find_setup(_uptrend_htf(), _setup_trigger(), base, smc_cfg)
+    assert s0.tags["zone_kind"] == "BPR" and not s0.tags["in_ote"]
+    s1 = find_setup(_uptrend_htf(), _setup_trigger(),
+                    {**base, "require_ote": True}, smc_cfg)
+    assert s1 is not None and s1.tags["zone_kind"] == "FVG"
+    assert s1.tags["in_ote"] and abs(s1.limit_price - 99.2) < 1e-9
+
+
+def test_sweep_sources_filters_pool_kind():
+    """sweep_sources：限定觸發 sweep 的池種。劇本掃的是單一 swing low
+    （SWING 池）——限定 EQ 應擋掉、限定 SWING 應照常成立。"""
+    smc_cfg = {"swing": {"left": 1, "right": 1}, "fvg": {"min_size_pct": 0.0001}}
+    base = {"min_rr_tp1": 0.5, "killzone_filter": False}
+    funnel = {}
+    assert find_setup(_uptrend_htf(), _setup_trigger(),
+                      {**base, "sweep_sources": ["EQ"]}, smc_cfg,
+                      funnel=funnel) is None
+    assert funnel.get("sweep 池種不符") == 1
+    s = find_setup(_uptrend_htf(), _setup_trigger(),
+                   {**base, "sweep_sources": ["SWING"]}, smc_cfg)
+    assert s is not None and s.tags["swept_pool"] == "SWING"
+
+
 def test_min_rr_tp1_filters_bad_setups():
     smc_cfg = {"swing": {"left": 1, "right": 1}, "fvg": {"min_size_pct": 0.0001}}
     cfg = {"min_rr_tp1": 50.0, "killzone_filter": False}   # 不可能達到的 RR

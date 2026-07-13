@@ -73,6 +73,10 @@ strategy:
     min_rr_tp1: 1.5           # TP1 報酬風險比低於此值就放棄 setup
     expiry_bars: 24           # 掛單幾根 entry K 未成交就撤
     killzone_filter: true     # 只在 smc.sessions 定義的時段內掛新單
+    require_ote: false        # true = 進場區 CE 必須落在 OTE 帶（硬條件）
+    sweep_sources: []         # 限定觸發 sweep 的池種，如 ["EQ"]；空 = 不限
+    # ↑ 這兩個是 2026-07 回測留下的假設（in_ote 的單較好、EQ 池優於 SWING），
+    #   樣本太小未驗證。要驗證：兩者都開再跑 ict-backtest 比較期望值。
 
 grid:                   # 自動網格機器人 (python main.py run-grid)
   auto_range: true      # true = 自動以「現價 ±range_pct」當區間（range_mode=fixed 時）
