@@ -113,6 +113,8 @@ smc:                    # SMC 偵測模組（Smart Money Concepts）參數
     max_reclaim_bars: 3
   fvg:
     min_size_pct: 0.0005      # 缺口最小寬度（佔現價比例），太小的雜訊不算
+  bpr:
+    max_bars_apart: 50        # 兩個 FVG 相距超過此根數不配對成 BPR（防組合爆炸）
   ob:
     zone: full_range          # full_range = 整根 K | body = 只算實體
   fib:

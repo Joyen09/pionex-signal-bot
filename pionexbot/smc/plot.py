@@ -95,8 +95,12 @@ def build_figure(klines, smc_cfg: dict | None = None):
                                            .get("min_size_pct", 0.0005)))
     obs = zones.detect_obs(klines, st.events,
                            zone_mode=str(cfg.get("ob", {}).get("zone", "full_range")))
-    bprs = zones.detect_bprs(fvgs)
-    all_zones = sorted(obs + fvgs + bprs, key=lambda z: z.created_at, reverse=True)
+    bpr_cfg = cfg.get("bpr", {})
+    bprs = zones.detect_bprs(
+        fvgs, max_bars_apart=int(bpr_cfg.get("max_bars_apart", 50)))
+    # FILLED（已走完失效）的區域不畫，只看還有交易意義的
+    live = [z for z in obs + fvgs + bprs if z.state != ZoneState.FILLED]
+    all_zones = sorted(live, key=lambda z: z.created_at, reverse=True)
     drawn = all_zones[:MAX_ZONES_DRAWN]
     dropped = len(all_zones) - len(drawn)
     for z in drawn:

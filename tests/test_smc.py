@@ -175,6 +175,16 @@ def test_bpr_intersection_and_priority_direction():
     assert z.direction == Direction.DOWN, "方向依後形成者"
 
 
+def test_bpr_not_paired_when_far_apart_in_time():
+    from pionexbot.smc.types import Zone
+    bull = Zone(ZoneKind.FVG, 10.5, 10.0, Direction.UP, created_at=5)
+    bear = Zone(ZoneKind.FVG, 10.8, 10.2, Direction.DOWN, created_at=500)
+    assert zones.detect_bprs([bull, bear]) == [], \
+        "相隔數百根的 FVG 不是同一場交戰，不得配對成 BPR"
+    assert len(zones.detect_bprs([bull, bear], max_bars_apart=None)) == 1, \
+        "max_bars_apart=None 應回到純數學交集"
+
+
 def test_ote_band_and_discount():
     lo, hi = zones.ote_band(100.0, 90.0)          # 0 在 high、1 在 low
     assert abs(lo - 92.1) < 1e-9 and abs(hi - 93.8) < 1e-9

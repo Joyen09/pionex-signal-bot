@@ -119,8 +119,14 @@ def _advance_states(zones: list[Zone], klines) -> None:
 # ------------------------------------------------------------------ #
 # BPR / Premium-Discount / OTE
 # ------------------------------------------------------------------ #
-def detect_bprs(fvgs: list[Zone]) -> list[Zone]:
-    """多頭 FVG 與空頭 FVG 的區域交集；方向依後形成者。"""
+def detect_bprs(fvgs: list[Zone],
+                max_bars_apart: Optional[int] = 50) -> list[Zone]:
+    """多頭 FVG 與空頭 FVG 的區域交集；方向依後形成者。
+
+    max_bars_apart：兩個 FVG 形成時間相距超過此根數就不配對。
+    講義的 BPR 是「同一場多空交戰中緊接形成」的兩個缺口；
+    不設限會讓相隔數百根的缺口互相配對，組合爆炸成上千個無意義區域。
+    設 None 可關閉限制（回到純數學交集）。"""
     out: list[Zone] = []
     bulls = [z for z in fvgs if z.direction == Direction.UP
              or (z.kind == ZoneKind.IFVG and z.direction == Direction.DOWN)]
@@ -128,6 +134,9 @@ def detect_bprs(fvgs: list[Zone]) -> list[Zone]:
              or (z.kind == ZoneKind.IFVG and z.direction == Direction.UP)]
     for a in bulls:
         for b in bears:
+            if max_bars_apart is not None \
+                    and abs(a.created_at - b.created_at) > max_bars_apart:
+                continue
             top = min(a.top, b.top)
             bottom = max(a.bottom, b.bottom)
             if top <= bottom:
