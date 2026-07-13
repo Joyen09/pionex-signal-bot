@@ -151,6 +151,19 @@ def _mtf_walk(n_entry=600, seed=11):
     return ks, agg(ks, 3), agg(ks, 48)
 
 
+def test_klines_sorted_ascending_regardless_of_api_order():
+    """派網單次抓取可能回傳新→舊；客戶端必須整隊成舊→新（HTF 走直通路徑
+    時若不排序，MTF 切片會看到空視野 → 漏斗 100% 卡「資料不足」）。"""
+    from pionexbot.pionex_client import PionexClient
+    desc = [{"time": 3000, "close": 3}, {"time": 2000, "close": 2},
+            {"time": 1000, "close": 1}]
+    out = PionexClient._sort_asc(desc)
+    assert [k["time"] for k in out] == [1000, 2000, 3000]
+    # 已是升冪 → 不變；缺時間戳 → 原樣返回不爆炸
+    assert PionexClient._sort_asc(out) == out
+    assert PionexClient._sort_asc([{"close": 1}]) == [{"close": 1}]
+
+
 def test_backtest_e2e_fill_and_take_profit():
     """端到端：劇本延伸出回踩觸價 → 拉升打 TP，驗證成交與 R 記帳。
     entry 與 trigger 用同一序列（15M），HTF 給已收盤的上升 4H。"""
