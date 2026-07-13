@@ -177,8 +177,13 @@ class PionexClient:
         collected: dict[int, dict[str, Any]] = {}
         end_time: Optional[int] = None
         for _ in range(40):  # 上限 40 頁 = 2 萬根，防呆
-            page = self.get_klines(symbol, interval,
-                                   self.MAX_KLINES_PER_REQUEST, end_time=end_time)
+            try:
+                page = self.get_klines(symbol, interval,
+                                       self.MAX_KLINES_PER_REQUEST, end_time=end_time)
+            except PionexError:
+                # 翻到交易所保存上限之外（MARKET_INVALID_TIME 等）→
+                # 優雅停手，回傳已抓到的部分，別讓整個回測炸掉
+                break
             if not page:
                 break
             times = [t for t in (self._kline_time(k) for k in page) if t is not None]
