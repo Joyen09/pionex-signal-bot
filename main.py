@@ -501,6 +501,63 @@ def cmd_symbol_info(bot: Bot, args) -> int:
     return 0
 
 
+def cmd_run_ict(bot: Bot) -> int:
+    from pionexbot.sources.ict_runner import IctRunner
+    runner = IctRunner(bot.cfg, bot.client, bot.executor, bot.notifier)
+    try:
+        runner.run_forever()
+    except KeyboardInterrupt:
+        print("\n已停止。")
+        bot.notifier.send("🛑 ict2022 機器人已手動停止。", "info", important=True)
+    except Exception as exc:  # noqa: BLE001
+        bot.notifier.send(f"💥 ict2022 機器人異常結束：{exc}", "error")
+        raise
+    return 0
+
+
+def cmd_ict_backtest(bot: Bot, args) -> int:
+    from pionexbot.backtest_ict import backtest_ict2022
+    from pionexbot.strategy.ict2022 import DEFAULTS
+
+    cfg = bot.cfg
+    p = {**DEFAULTS, **cfg.strategy.get("ict2022", {})}
+    symbol = (args.symbol or cfg.symbol).upper()
+    limit = args.limit or 5000          # entry 時框根數
+    # 三個時框都抓足以覆蓋同一段時間的量
+    e_int, t_int, h_int = p["entry_interval"], p["trigger_interval"], p["htf_interval"]
+    from pionexbot.smc.mtf import interval_ms
+    span = limit * interval_ms(e_int)
+    t_total = span // interval_ms(t_int) + 400
+    h_total = span // interval_ms(h_int) + 250
+
+    print(f"抓取 {symbol}：entry {e_int}×{limit}、trigger {t_int}×{t_total}、"
+          f"HTF {h_int}×{h_total} ...")
+    try:
+        entry_k = bot.client.get_klines_history(symbol, e_int, total=limit)
+        trig_k = bot.client.get_klines_history(symbol, t_int, total=int(t_total))
+        htf_k = bot.client.get_klines_history(symbol, h_int, total=int(h_total))
+    except PionexError as exc:
+        print(f"❌ 抓 K 線失敗：{exc}")
+        return 1
+    if len(entry_k) < 500:
+        print(f"❌ entry K 線太少（{len(entry_k)}）")
+        return 1
+
+    smc_cfg = cfg.raw.get("smc", {})
+    rep = backtest_ict2022(
+        entry_k, trig_k, htf_k, ict_cfg=p, smc_cfg=smc_cfg,
+        sessions_cfg=smc_cfg.get("sessions"),
+        slippage_pct=float(cfg.raw.get("backtest", {}).get("slippage_pct", 0.0)),
+        breakeven_after_tp=int(cfg.risk.get("breakeven_after_tp", 1)),
+        breakeven_offset_pct=float(cfg.risk.get("breakeven_offset_pct", 0.001)),
+    )
+    print(f"\n=== ict2022 回測（{symbol}，entry {e_int}×{len(entry_k)}）===")
+    print(rep.summary())
+    print("\n判讀：期望值 E 為正且獲利因子 > 1 才值得進 paper；"
+          "『不含滑價的理想值』請再保守打折。tags 分組看哪些條件真的加分。")
+    return 0
+
+
 def cmd_smc_plot(bot: Bot, args) -> int:
     """SMC 視覺化驗收（規格 §5.1）：K 線 + swing/BOS/MSS/區域/sweep/killzone。"""
     try:
@@ -565,7 +622,7 @@ def main(argv: list[str] | None = None) -> int:
                                  "backtest", "backtest-sweep", "optimize",
                                  "grid-backtest", "grid-compare",
                                  "dca-backtest", "symbol-info", "notify-test",
-                                 "smc-plot"])
+                                 "smc-plot", "run-ict", "ict-backtest"])
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--quote", type=float, help="買入金額（報價幣）")
     parser.add_argument("--base", type=float, help="賣出數量（基礎幣）")
@@ -617,6 +674,10 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_notify_test(bot)
         if args.command == "smc-plot":
             return cmd_smc_plot(bot, args)
+        if args.command == "run-ict":
+            return cmd_run_ict(bot)
+        if args.command == "ict-backtest":
+            return cmd_ict_backtest(bot, args)
         if args.command == "buy":
             return cmd_manual(bot, Action.BUY, args.quote or
                               float(cfg.trading.get("quote_per_trade", 20)), None)

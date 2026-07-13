@@ -80,6 +80,10 @@ python main.py backtest-sweep --interval 5M --limit 1000
 
 # SMC 偵測視覺化驗收（swing / BOS / MSS / OB / FVG / sweep / killzone）
 python main.py smc-plot --interval 15M --limit 1000 --out smc.html
+
+# ict2022 SMC 策略：回測（R 倍數統計 + tags 分組）與執行
+python main.py ict-backtest --limit 5000
+python main.py run-ict
 ```
 
 ### 內建策略

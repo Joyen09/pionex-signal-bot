@@ -61,6 +61,19 @@ strategy:
     # period: 20
     # num_std: 2.0
 
+  # --- ict2022 SMC 策略 (python main.py run-ict / ict-backtest) ---
+  ict2022:
+    htf_interval: "4H"        # 高階時框：決定多空偏向（結構 UP 才做多）
+    trigger_interval: "15M"   # 觸發時框：sweep + MSS + 進場區域偵測
+    entry_interval: "5M"      # 進場時框：限價單成交與逾期計數
+    lookback_sweep_bars: 60   # 幾根 trigger K 內要出現過 sweep
+    entry_price_mode: ce      # ce = 掛區域中點 | zone_edge = 掛區域上緣
+    sl_buffer_pct: 0.001      # SL = min(sweep 收針, 區域下緣) × (1 − 此值)
+    tp_allocation: [0.5, 0.3, 0.2]   # 各段停利比例（TP 不足 3 個時尾段吃剩餘）
+    min_rr_tp1: 1.5           # TP1 報酬風險比低於此值就放棄 setup
+    expiry_bars: 24           # 掛單幾根 entry K 未成交就撤
+    killzone_filter: true     # 只在 smc.sessions 定義的時段內掛新單
+
 grid:                   # 自動網格機器人 (python main.py run-grid)
   auto_range: true      # true = 自動以「現價 ±range_pct」當區間（range_mode=fixed 時）
   range_pct: 0.15       # 固定模式的區間幅度（0.15 = 現價上下各 15%）
