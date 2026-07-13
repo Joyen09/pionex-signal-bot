@@ -144,9 +144,19 @@ class PionexClient:
             return int(k[0])
         return None
 
+    @classmethod
+    def _sort_asc(cls, klines: list) -> list:
+        """依時間排序為「舊→新」。派網 API 的回傳順序不保證（單次抓取
+        實測可能是新→舊），而所有下游（策略、指標、多時框對齊）都假設
+        舊→新，統一在客戶端整隊，缺時間戳時原樣返回。"""
+        keyed = [(cls._kline_time(k), k) for k in klines]
+        if not keyed or any(t is None for t, _ in keyed):
+            return klines
+        return [k for _, k in sorted(keyed, key=lambda p: p[0])]
+
     def get_klines(self, symbol: str, interval: str = "5M",
                    limit: int = 100, end_time: Optional[int] = None) -> list[dict[str, Any]]:
-        """取得 K 線（單次，limit 上限 500）。回傳 list，每筆含 close/time 等。"""
+        """取得 K 線（單次，limit 上限 500）。回傳「舊→新」，每筆含 close/time 等。"""
         q: dict[str, Any] = {
             "symbol": symbol, "interval": self._norm_interval(interval),
             "limit": min(int(limit), self.MAX_KLINES_PER_REQUEST),
@@ -155,7 +165,7 @@ class PionexClient:
             q["endTime"] = int(end_time)
         data = self._request("GET", "/api/v1/market/klines", query=q)
         klines = data.get("data", {}).get("klines", data.get("data", []))
-        return klines or []
+        return self._sort_asc(klines or [])
 
     def get_klines_history(self, symbol: str, interval: str = "5M",
                            total: int = 1000) -> list[dict[str, Any]]:
@@ -167,8 +177,13 @@ class PionexClient:
         collected: dict[int, dict[str, Any]] = {}
         end_time: Optional[int] = None
         for _ in range(40):  # 上限 40 頁 = 2 萬根，防呆
-            page = self.get_klines(symbol, interval,
-                                   self.MAX_KLINES_PER_REQUEST, end_time=end_time)
+            try:
+                page = self.get_klines(symbol, interval,
+                                       self.MAX_KLINES_PER_REQUEST, end_time=end_time)
+            except PionexError:
+                # 翻到交易所保存上限之外（MARKET_INVALID_TIME 等）→
+                # 優雅停手，回傳已抓到的部分，別讓整個回測炸掉
+                break
             if not page:
                 break
             times = [t for t in (self._kline_time(k) for k in page) if t is not None]
