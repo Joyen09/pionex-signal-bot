@@ -39,6 +39,8 @@ DEFAULTS = {
     "min_rr_tp1": 1.5,
     "expiry_bars": 24,
     "killzone_filter": True,
+    "require_ote": False,     # True = 進場區 CE 必須落在 OTE 帶（硬條件）
+    "sweep_sources": [],      # 限定觸發 sweep 的池種（如 ["EQ"]）；空 = 不限
 }
 
 
@@ -112,6 +114,12 @@ def find_setup(htf_klines, trigger_klines, cfg: dict,
     if not recent:
         _block("近期無 SELL_SIDE sweep")
         return None
+    allowed = {str(x).upper() for x in (p.get("sweep_sources") or [])}
+    if allowed:
+        recent = [s for s in recent if s.pool.source.value in allowed]
+        if not recent:
+            _block("sweep 池種不符")
+            return None
     sweep = max(recent, key=lambda s: s.confirmed_at)
 
     # 3) sweep 之後的看漲 MSS
@@ -163,6 +171,11 @@ def find_setup(htf_klines, trigger_klines, cfg: dict,
         return None
     def in_ote(z) -> bool:
         return ote_lo <= z.ce <= ote_hi
+    if p["require_ote"]:
+        cands = [z for z in cands if in_ote(z)]
+        if not cands:
+            _block("OTE 外")
+            return None
     cands.sort(key=lambda z: (_ZONE_PRIORITY.get(z.kind, 9),
                               0 if in_ote(z) else 1, -z.created_at))
     zone = cands[0]

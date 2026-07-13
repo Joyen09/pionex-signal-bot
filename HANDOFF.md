@@ -82,7 +82,7 @@ docker compose -f docker-compose.paper.yml run --rm webhook run-ict   # ict2022 
 
 按優先序建議：
 1. **merge PR #1**（安全，收工具進 main）
-2. 若繼續 ict2022：`in_ote=true`＋`EQ 池` 硬條件重回測；或 paper `run-ict` 掛著累積前瞻樣本（記得先在 config 補 `backtest.slippage_pct: 0.001`——注意 `backtest:` 是頂層區段，不在 strategy 底下）
+2. 若繼續 ict2022：硬條件開關已做好（`strategy.ict2022` 下設 `require_ote: true` 與 `sweep_sources: ["EQ"]`，回測與 run-ict 共用），設定後重跑六幣 `ict-backtest` 比較期望值；或 paper `run-ict` 掛著累積前瞻樣本（記得先在 config 補 `backtest.slippage_pct: 0.001`——注意 `backtest:` 是頂層區段，不在 strategy 底下）
 3. 使用者還想做的其他機器人：台股、每日便宜機票搜尋、OCR 圖片辨識（都想用同一隻 Discord bot 架構）
 4. 網格照顧：跌破 60369 會自動平倉重開（設計行為）；BTC 現處 2026 熊市，使用者知道 4 年週期論
 
