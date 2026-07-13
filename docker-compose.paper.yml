@@ -1,0 +1,37 @@
+# 紙上測試專用 Compose —— 與正式部署完全隔離，可同一台機器平行跑。
+#
+# 用法（建議 clone 第二份 repo 到 ~/bot-paper 再用這份）：
+#   docker compose -f docker-compose.paper.yml up -d --build
+#   docker compose -f docker-compose.paper.yml logs -f
+#
+# 隔離重點：
+#   - image / container 名稱都加 -paper，不會覆蓋或撞到正式的 pionex-grid
+#   - 對外埠 8081（正式 webhook 用 8080）
+#   - data/ logs/ 跟著本目錄走，與正式的資料庫互不相干
+
+services:
+  webhook:
+    build: .
+    image: pionex-signal-bot-paper
+    container_name: pionex-paper-webhook
+    restart: unless-stopped
+    env_file: .env
+    command: ["run-webhook"]
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data
+      - ./logs:/app/logs
+
+  strategy:
+    build: .
+    image: pionex-signal-bot-paper
+    container_name: pionex-paper-strategy
+    restart: unless-stopped
+    env_file: .env
+    command: ["run-strategy"]
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data
+      - ./logs:/app/logs

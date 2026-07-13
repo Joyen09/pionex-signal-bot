@@ -77,6 +77,13 @@ python main.py backtest --strategy macd --interval 1H --limit 1000
 
 # 掃描最佳停損 / 停利
 python main.py backtest-sweep --interval 5M --limit 1000
+
+# SMC 偵測視覺化驗收（swing / BOS / MSS / OB / FVG / sweep / killzone）
+python main.py smc-plot --interval 15M --limit 1000 --out smc.html
+
+# ict2022 SMC 策略：回測（R 倍數統計 + tags 分組）與執行
+python main.py ict-backtest --limit 5000
+python main.py run-ict
 ```
 
 ### 內建策略
@@ -108,8 +115,26 @@ python main.py backtest-sweep --interval 5M --limit 1000
 {"secret": "你的密鑰", "action": "BUY", "symbol": "BTC_USDT", "quote_amount": 20}
 ```
 
-平倆送 `{"secret": "你的密鑰", "action": "SELL", "symbol": "BTC_USDT"}`。
+平倉送 `{"secret": "你的密鑰", "action": "SELL", "symbol": "BTC_USDT"}`。
 `action` 接受 `BUY/LONG/ENTRY` 與 `SELL/EXIT/CLOSE/SHORT`。
+
+### 以止損決定倉位（進階）
+
+訊號可以自帶止損與多段停利，倉位大小改由「這筆願意虧多少」推算——
+`數量 = 願虧金額 ÷ (進場價 − 止損價)`，虧損固定、倉位隨止損距離自動縮放：
+
+```json
+{"secret": "你的密鑰", "action": "BUY", "symbol": "BTC_USDT",
+ "sl": 64000,
+ "tps": [{"price": 68000, "fraction": 0.5}, {"price": 70000, "fraction": 0.5}],
+ "risk_quote": 50}
+```
+
+- `risk_quote` 未帶時，用 `risk.risk_per_trade_pct`（權益百分比）或 `risk.risk_quote_default`。
+- 停利觸價分批賣出；第一段成交後止損自動移到保本（`breakeven_after_tp`）。
+- 止損為「收盤觸發」：收盤價跌破 SL 才平倉；同根 K 同時觸 TP 與 SL 以 SL 計（保守）。
+- 另有 `risk.max_trades_per_day`（每日開單上限）與消息封鎖（`data/news_calendar.yaml`，
+  範本見 `news_calendar.example.yaml`）——重大數據公布前後拒絕新進場。
 
 ## Docker 部署
 

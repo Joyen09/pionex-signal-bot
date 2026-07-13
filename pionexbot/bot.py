@@ -41,7 +41,8 @@ class Bot:
         self.store = Store("data/bot.db")
         self.risk = RiskManager(cfg.risk)
         self.broker: Broker = self._make_broker()
-        self.executor = Executor(self.broker, self.risk, self.store, self.notifier)
+        self.executor = Executor(self.broker, self.risk, self.store, self.notifier,
+                                 risk_cfg=cfg.risk)
 
     def _make_broker(self) -> Broker:
         if self.cfg.is_live:

@@ -179,12 +179,97 @@ def cmd_dca_backtest(bot: Bot, args) -> int:
     return 0
 
 
+def _signal_status_text(bot: Bot, store) -> str:
+    """訊號機器人（策略/webhook）目前狀態：持倉、出場計畫、累計損益。"""
+    mode = "實盤" if bot.cfg.is_live else "紙上"
+    pos = store.load_position()
+    try:
+        price = bot.broker.get_price(bot.cfg.symbol)
+    except Exception:  # noqa: BLE001
+        price = 0.0
+    lines = [f"🧪 訊號機器人狀態（{mode}｜{bot.cfg.symbol}）",
+             f"現價 {price:.2f}",
+             f"持倉 {pos.base:.8f} @ 均價 {pos.avg_cost:.2f}"]
+    if pos.base > 0 and price:
+        lines.append(f"未實現 {(price - pos.avg_cost) * pos.base:+.2f}")
+    plan = store.load_plan()
+    if plan:
+        lines.append(f"出場計畫：SL {float(plan['stop_loss']):.2f}"
+                     f"（進場 {float(plan['entry']):.2f}）")
+        for t in plan.get("tps", []):
+            mark = "✅" if t["filled"] else "⏳"
+            lines.append(f"  {mark} TP {t['price']} × {t['fraction']}")
+    count, pnl = store.stats_since(0)
+    lines.append(f"累計成交 {count} 筆，已實現 {pnl:+.2f}")
+    return "\n".join(lines)
+
+
+def _plan_monitor_loop(bot: Bot, poll_seconds: int = 20) -> None:
+    """Webhook 模式背景監控：出場計畫（TP 觸價 / SL 收盤觸發）＋ Discord 查詢。
+
+    SQLite 連線不能跨執行緒共用，本執行緒開自己的 Store / Executor
+    （同一個 data/bot.db 檔案，SQLite 以檔案鎖處理並行）。"""
+    import time as _time
+
+    from pionexbot.executor import Executor
+    from pionexbot.store import Store
+
+    store = Store("data/bot.db")
+    execu = Executor(bot.broker, bot.risk, store, bot.notifier,
+                     risk_cfg=bot.cfg.risk)
+    interval = bot.cfg.strategy.get("interval", "5M")
+    last_candle = None
+    discord_after = None
+    while True:
+        try:
+            plan = store.load_plan()
+            if plan:
+                price = bot.broker.get_price(bot.cfg.symbol)
+                candle_close = None
+                kl = bot.client.get_klines(bot.cfg.symbol, interval, limit=3)
+                if len(kl) >= 2:
+                    k = kl[-2]  # 最後一根已收盤
+                    t = k.get("time") if isinstance(k, dict) else k[0]
+                    if t != last_candle:
+                        last_candle = t
+                        c = k.get("close") if isinstance(k, dict) else k[4]
+                        candle_close = float(c)
+                execu.check_plan(price, candle_close=candle_close)
+
+            # Discord 打字查詢（唯讀，與 grid_runner 同一套過濾規則）
+            if bot.notifier.discord_bot_enabled:
+                msgs = bot.notifier.get_discord_messages(after=discord_after)
+                if msgs:
+                    newest = max(int(m["id"]) for m in msgs
+                                 if str(m.get("id", "")).isdigit())
+                    first_poll = discord_after is None
+                    discord_after = str(newest)
+                    if not first_poll:
+                        for m in msgs:
+                            if m.get("webhook_id") or (m.get("author") or {}).get("bot"):
+                                continue
+                            author = str((m.get("author") or {}).get("id", ""))
+                            uid = bot.notifier.discord_user_id
+                            if uid and author != str(uid):
+                                continue
+                            bot.notifier.send(_signal_status_text(bot, store),
+                                              important=True)
+                            break
+        except Exception as exc:  # noqa: BLE001 - 監控錯誤不該讓伺服器倒
+            bot.notifier.send(f"⚠️ 出場計畫監控錯誤：{exc}", "warning")
+        _time.sleep(poll_seconds)
+
+
 def cmd_run_webhook(bot: Bot) -> int:
+    import threading
+
     import uvicorn
     from pionexbot.sources.webhook import build_app
     app = build_app(bot.cfg, bot.executor, bot.notifier)
     wh = bot.cfg.webhook
     mode = "實盤" if bot.cfg.is_live else "紙上"
+    # 背景監控 SL/TP（帶止損的訊號進場後，出場由這條執行緒盯）
+    threading.Thread(target=_plan_monitor_loop, args=(bot,), daemon=True).start()
     print(f"🤖 Webhook 伺服器啟動（{mode}模式）"
           f" http://{wh.get('host','0.0.0.0')}:{wh.get('port',8080)}{wh.get('path','/webhook')}")
     uvicorn.run(app, host=wh.get("host", "0.0.0.0"), port=int(wh.get("port", 8080)))
@@ -416,6 +501,94 @@ def cmd_symbol_info(bot: Bot, args) -> int:
     return 0
 
 
+def cmd_run_ict(bot: Bot) -> int:
+    from pionexbot.sources.ict_runner import IctRunner
+    runner = IctRunner(bot.cfg, bot.client, bot.executor, bot.notifier)
+    try:
+        runner.run_forever()
+    except KeyboardInterrupt:
+        print("\n已停止。")
+        bot.notifier.send("🛑 ict2022 機器人已手動停止。", "info", important=True)
+    except Exception as exc:  # noqa: BLE001
+        bot.notifier.send(f"💥 ict2022 機器人異常結束：{exc}", "error")
+        raise
+    return 0
+
+
+def cmd_ict_backtest(bot: Bot, args) -> int:
+    from pionexbot.backtest_ict import backtest_ict2022
+    from pionexbot.strategy.ict2022 import DEFAULTS
+
+    cfg = bot.cfg
+    p = {**DEFAULTS, **cfg.strategy.get("ict2022", {})}
+    symbol = (args.symbol or cfg.symbol).upper()
+    limit = args.limit or 5000          # entry 時框根數
+    # 三個時框都抓足以覆蓋同一段時間的量
+    e_int, t_int, h_int = p["entry_interval"], p["trigger_interval"], p["htf_interval"]
+    from pionexbot.smc.mtf import interval_ms
+    span = limit * interval_ms(e_int)
+    t_total = span // interval_ms(t_int) + 400
+    h_total = span // interval_ms(h_int) + 250
+
+    print(f"抓取 {symbol}：entry {e_int}×{limit}、trigger {t_int}×{t_total}、"
+          f"HTF {h_int}×{h_total} ...")
+    try:
+        entry_k = bot.client.get_klines_history(symbol, e_int, total=limit)
+        trig_k = bot.client.get_klines_history(symbol, t_int, total=int(t_total))
+        htf_k = bot.client.get_klines_history(symbol, h_int, total=int(h_total))
+    except PionexError as exc:
+        print(f"❌ 抓 K 線失敗：{exc}")
+        return 1
+    if len(entry_k) < 500:
+        print(f"❌ entry K 線太少（{len(entry_k)}）")
+        return 1
+
+    smc_cfg = cfg.raw.get("smc", {})
+    rep = backtest_ict2022(
+        entry_k, trig_k, htf_k, ict_cfg=p, smc_cfg=smc_cfg,
+        sessions_cfg=smc_cfg.get("sessions"),
+        slippage_pct=float(cfg.raw.get("backtest", {}).get("slippage_pct", 0.0)),
+        breakeven_after_tp=int(cfg.risk.get("breakeven_after_tp", 1)),
+        breakeven_offset_pct=float(cfg.risk.get("breakeven_offset_pct", 0.001)),
+    )
+    print(f"\n=== ict2022 回測（{symbol}，entry {e_int}×{len(entry_k)}）===")
+    print(rep.summary())
+    print("\n判讀：期望值 E 為正且獲利因子 > 1 才值得進 paper；"
+          "『不含滑價的理想值』請再保守打折。tags 分組看哪些條件真的加分。")
+    return 0
+
+
+def cmd_smc_plot(bot: Bot, args) -> int:
+    """SMC 視覺化驗收（規格 §5.1）：K 線 + swing/BOS/MSS/區域/sweep/killzone。"""
+    try:
+        from pionexbot.smc.plot import build_figure
+        import plotly  # noqa: F401
+    except ImportError:
+        print("❌ 需要 plotly：pip install plotly")
+        return 1
+
+    symbol = (args.symbol or bot.cfg.symbol).upper()
+    interval = args.interval or "15M"
+    limit = args.limit or 1000
+    out = args.out or "smc.html"
+
+    print(f"抓取 {symbol} {interval} 共 {limit} 根 K 線 ...")
+    try:
+        klines = bot.client.get_klines_history(symbol, interval, total=limit)
+    except PionexError as exc:
+        print(f"❌ 抓 K 線失敗：{exc}")
+        return 1
+    if len(klines) < 50:
+        print(f"❌ K 線太少（{len(klines)}）")
+        return 1
+
+    fig = build_figure(klines, bot.cfg.raw.get("smc", {}))
+    fig.write_html(out)
+    print(f"✅ 已輸出 {out}（{len(klines)} 根）。用瀏覽器打開，"
+          "對照講義範例圖人工驗收偵測結果。")
+    return 0
+
+
 def cmd_notify_test(bot: Bot) -> int:
     n = bot.notifier
     print(f"Discord 推播：{n.discord_enabled}　Discord 雙向：{n.discord_bot_enabled}　"
@@ -448,7 +621,8 @@ def main(argv: list[str] | None = None) -> int:
                                  "buy", "sell",
                                  "backtest", "backtest-sweep", "optimize",
                                  "grid-backtest", "grid-compare",
-                                 "dca-backtest", "symbol-info", "notify-test"])
+                                 "dca-backtest", "symbol-info", "notify-test",
+                                 "smc-plot", "run-ict", "ict-backtest"])
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--quote", type=float, help="買入金額（報價幣）")
     parser.add_argument("--base", type=float, help="賣出數量（基礎幣）")
@@ -460,6 +634,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--upper", type=float, help="網格上緣價格")
     parser.add_argument("--grids", type=int, help="網格數量")
     parser.add_argument("--symbol", help="覆寫交易對（如 ETH_USDT），用於回測掃描")
+    parser.add_argument("--out", help="smc-plot 輸出的 HTML 檔名（預設 smc.html）")
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -497,6 +672,12 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_symbol_info(bot, args)
         if args.command == "notify-test":
             return cmd_notify_test(bot)
+        if args.command == "smc-plot":
+            return cmd_smc_plot(bot, args)
+        if args.command == "run-ict":
+            return cmd_run_ict(bot)
+        if args.command == "ict-backtest":
+            return cmd_ict_backtest(bot, args)
         if args.command == "buy":
             return cmd_manual(bot, Action.BUY, args.quote or
                               float(cfg.trading.get("quote_per_trade", 20)), None)

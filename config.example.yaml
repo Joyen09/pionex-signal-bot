@@ -25,8 +25,19 @@ risk:
   allow_short: false           # 現貨不可做空；保留給未來合約
   # 停損/停利建議值（順勢策略：留停損當安全網、關掉停利讓獲利奔跑）
   # 真正最佳值請用真實資料跑：python main.py backtest-sweep
-  stop_loss_pct: 0.05          # 停損：虧損達 5% 自動平倆（0 = 關閉）
-  take_profit_pct: 0           # 停利：關閉，靠策略的死交叉出場（0 = 關閉）
+  stop_loss_pct: 0.05          # 停損：虧損達 5% 自動平倉（0 = 關閉）
+  take_profit_pct: 0           # 停利：關閉，靠策略的死亡交叉出場（0 = 關閉）
+
+  # --- 以止損決定倉位（訊號帶 stop_loss 時生效）---
+  risk_per_trade_pct: 0.01     # 每筆風險 = 帳戶權益的 1%（訊號帶 risk_quote 優先）
+  risk_quote_default: null     # 或固定每筆願虧金額（USDT）；與上面擇一
+  paper_equity: 1000           # 紙上模式沒有真實餘額，用這個當權益基準
+  max_trades_per_day: 3        # 每日新進場上限（不影響出場）；0 = 不限
+  breakeven_after_tp: 1        # 第 N 段停利成交後把止損移到保本；0 = 關閉
+  breakeven_offset_pct: 0.001  # 保本價 = 進場價 × (1 + 此值)，蓋過手續費
+  fill_ambiguity: worst        # 同根 K 同觸 SL/TP → 以 SL 計（保守）
+  news_calendar_path: data/news_calendar.yaml   # 消息封鎖日曆（見範本）
+  news_close_positions: false  # 消息視窗只擋新進場，不動既有部位
 
 strategy:
   # 可用策略：ma_cross / rsi / macd / bollinger
@@ -49,6 +60,19 @@ strategy:
     # --- bollinger（換成 name: bollinger 時使用）---
     # period: 20
     # num_std: 2.0
+
+  # --- ict2022 SMC 策略 (python main.py run-ict / ict-backtest) ---
+  ict2022:
+    htf_interval: "4H"        # 高階時框：決定多空偏向（結構 UP 才做多）
+    trigger_interval: "15M"   # 觸發時框：sweep + MSS + 進場區域偵測
+    entry_interval: "5M"      # 進場時框：限價單成交與逾期計數
+    lookback_sweep_bars: 60   # 幾根 trigger K 內要出現過 sweep
+    entry_price_mode: ce      # ce = 掛區域中點 | zone_edge = 掛區域上緣
+    sl_buffer_pct: 0.001      # SL = min(sweep 收針, 區域下緣) × (1 − 此值)
+    tp_allocation: [0.5, 0.3, 0.2]   # 各段停利比例（TP 不足 3 個時尾段吃剩餘）
+    min_rr_tp1: 1.5           # TP1 報酬風險比低於此值就放棄 setup
+    expiry_bars: 24           # 掛單幾根 entry K 未成交就撤
+    killzone_filter: true     # 只在 smc.sessions 定義的時段內掛新單
 
 grid:                   # 自動網格機器人 (python main.py run-grid)
   auto_range: true      # true = 自動以「現價 ±range_pct」當區間（range_mode=fixed 時）
@@ -88,6 +112,31 @@ dca:                    # 智慧 DCA 定投 (python main.py run-dca)，只買不
   take_profit_pct: 0    # 帳面獲利達此 % 自動停利（0=關閉；如 0.5=+50% 就賣）
   take_profit_fraction: 1.0  # 停利時賣出比例（1.0=全賣後重新定投；0.5=賣一半續抱）
   poll_seconds: 30
+
+smc:                    # SMC 偵測模組（Smart Money Concepts）參數
+  max_bars: 1500        # 每次收盤重算最近幾根（先求對、再求快）
+  swing:
+    left: 3             # swing 分形左側根數
+    right: 3            # 右側根數（右側收盤後才「確認」，防未來函數）
+  structure:
+    break_mode: close   # close = 收盤突破才算 | wick = 影線碰到就算
+  liquidity:
+    eq_tolerance_pct: 0.001   # 等高/等低合併容忍度（0.1%）
+    sweep_mode: wick          # wick = 單根收針 | reclaim = 收盤收回
+    max_reclaim_bars: 3
+  fvg:
+    min_size_pct: 0.0005      # 缺口最小寬度（佔現價比例），太小的雜訊不算
+  bpr:
+    max_bars_apart: 50        # 兩個 FVG 相距超過此根數不配對成 BPR（防組合爆炸）
+  ob:
+    zone: full_range          # full_range = 整根 K | body = 只算實體
+  fib:
+    ote: [0.62, 0.79]         # OTE 進場帶（0 錨定 range 高點、1 錨定低點）
+  sessions:
+    tz: "America/New_York"    # IANA 時區，夏冬令自動處理
+    asia:    ["20:00", "00:00"]
+    london:  ["03:00", "06:00"]
+    newyork: ["09:00", "11:00"]
 
 webhook:
   host: 0.0.0.0
