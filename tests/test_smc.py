@@ -231,6 +231,18 @@ def test_bpr_width_threshold_no_exemption():
         "BPR 自身寬度必須過 min_size_pct，交集不豁免"
 
 
+def test_bpr_components_must_be_displacement_grade():
+    from pionexbot.smc.types import Zone
+    # 兩個 0.1% 的雜訊缺口，交集 0.08% 過得了規則 4，
+    # 但組件本身不到位移級（0.15%）→ 規則 6 擋下
+    bull = Zone(ZoneKind.FVG, 100.10, 100.00, Direction.UP, created_at=4)
+    bear = Zone(ZoneKind.FVG, 100.12, 100.02, Direction.DOWN, created_at=6)
+    assert zones.detect_bprs([bull, bear]) == [], \
+        "組成 BPR 的兩個 FVG 都必須是位移級"
+    assert len(zones.detect_bprs([bull, bear], component_min_pct=0.0005)) == 1, \
+        "門檻可調（預設跟 displacement_fvg_min_pct 同一把尺）"
+
+
 def test_bpr_dedup_keeps_newer():
     from pionexbot.smc.types import Zone
     bull = Zone(ZoneKind.FVG, 10.5, 10.0, Direction.UP, created_at=4)

@@ -155,6 +155,7 @@ def detect_bprs(fvgs: list[Zone], klines=None, *,
                 require_overlap_leg: bool = True,
                 dedup_overlap_pct: float = 0.5,
                 min_size_pct: float = 0.0005,
+                component_min_pct: float = 0.0015,
                 max_age_bars: Optional[int] = 200) -> list[Zone]:
     """BPR（v1.1）：「同一價區先後被兩個方向的位移充分傳遞」，全部滿足才成立：
 
@@ -164,6 +165,10 @@ def detect_bprs(fvgs: list[Zone], klines=None, *,
     3. 兩者當時皆未失效：配對瞬間第一個 FVG 不得已被移除（FILLED/再穿/TTL）
     4. 自身寬度門檻：交集寬度/現價 ≥ min_size_pct（與 FVG 同標準，交集不豁免）
     5. 去重：與既有 BPR 重疊比例 > dedup_overlap_pct → 只留較新者
+    6. 組件位移級：兩個 FVG 本身寬度/現價 ≥ component_min_pct——BPR 的定義
+       是「被兩個方向的位移**充分**傳遞」，與位移判定同一把尺
+       （displacement_fvg_min_pct）。密度實測：0.05% 的雜訊缺口互相交集
+       產出的細條佔 BPR 族群 2/3，gap/dedup 都推不動，這才是正確的旋鈕。
 
     方向依後形成者的「原始極性」（配對當下它還沒被翻轉）。
     v1.0 的純數學交集在盤整段會組合爆炸（實測 10 天 BTC 15M 生出 300+ 個
@@ -195,6 +200,9 @@ def detect_bprs(fvgs: list[Zone], klines=None, *,
                 else (top + bottom) / 2
             if px <= 0 or (top - bottom) / px < min_size_pct:
                 continue                                   # 規則 4
+            if (a.top - a.bottom) / px < component_min_pct \
+                    or (b.top - b.bottom) / px < component_min_pct:
+                continue                                   # 規則 6
             direction = Direction.UP if second is a else Direction.DOWN
             pairs.append(Zone(ZoneKind.BPR, top, bottom, direction,
                               created_at=second.created_at, time=second.time))
@@ -255,12 +263,17 @@ def detect_all(klines, smc_cfg: Optional[dict] = None,
                      max_age_bars=max_age)
     bcfg = sc.get("bpr", {})
     raw_gap = bcfg.get("max_gap_bars", bcfg.get("max_bars_apart", 20))
+    # 組件門檻預設跟位移判定同一把尺（可用 bpr.component_min_pct 覆寫）
+    comp_min = float(bcfg.get(
+        "component_min_pct",
+        sc.get("structure", {}).get("displacement_fvg_min_pct", 0.0015)))
     bprs = detect_bprs(
         fvgs, klines,
         max_gap_bars=int(raw_gap) if raw_gap is not None else None,
         require_overlap_leg=bool(bcfg.get("require_overlap_leg", True)),
         dedup_overlap_pct=float(bcfg.get("dedup_overlap_pct", 0.5)),
-        min_size_pct=fvg_min, max_age_bars=max_age)
+        min_size_pct=fvg_min, component_min_pct=comp_min,
+        max_age_bars=max_age)
     out = fvgs + obs + bprs
     if max_active:
         _cap_active_per_kind(out, max_active)
