@@ -608,7 +608,7 @@ def cmd_binance_backtest(bot: Bot, args) -> int:
     smc_cfg = cfg.raw.get("smc", {})
     symbol = (args.symbol or cfg.symbol).upper()
     # base_url 優先序：--base > config backtest.binance_base_url > 預設（vision 端點）
-    base_url = args.base or cfg.raw.get("backtest", {}).get("binance_base_url")
+    base_url = args.base_url or cfg.raw.get("backtest", {}).get("binance_base_url")
     client = BinanceClient(base_url=base_url)
 
     def _to_ms(date_str: str) -> int:
@@ -790,7 +790,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--data", help="smc-stats 改用 K 線快照檔（離線重算）")
     parser.add_argument("--start", help="binance-backtest 自訂區間起日 YYYY-MM-DD")
     parser.add_argument("--end", help="binance-backtest 自訂區間迄日 YYYY-MM-DD")
-    parser.add_argument("--base", help="binance-backtest 覆寫端點（地區限制時用）")
+    parser.add_argument("--base-url", dest="base_url",
+                        help="binance-backtest 覆寫端點（地區限制時用）")
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
