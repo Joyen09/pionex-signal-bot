@@ -25,7 +25,9 @@ FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 # 初始校準區間（v1.1 §4）。改動門檻值必須附 smc-plot 截圖佐證，
 # 且理由只能來自密度/視覺證據——不得以回測績效為由改動（曲線擬合禁令）。
 DENSITY_PER_1000_BARS_15M = {
-    "swings":            (60, 140),  # 每 ~5 根一個轉折（L/R=3 的合理範圍）
+    "swings":            (60, 140),  # 單邊（高、低各自）——規格 §0 的參考資料
+                                     # 是 103/93，總和判定會讓規格自身資料不過
+
     "mss_displaced_max":  8,         # displacement=true 的 MSS
     "mss_over_bos_max":   0.6,       # 皆以 displacement=true 計
     "bpr_total_max":      15,        # v1.0 實測 300+ → 修好應寥寥可數
@@ -48,8 +50,10 @@ def test_density_swings_in_range():
         print("    （略過：無 fixture，見檔頭產生方式）")
         return
     lo, hi = DENSITY_PER_1000_BARS_15M["swings"]
-    got = d["swing_highs"] + d["swing_lows"]
-    assert lo <= got * 1000 / d["bars"] <= hi, f"swing 密度 {got}/{d['bars']} 根"
+    scale = 1000 / d["bars"]
+    for side in ("swing_highs", "swing_lows"):
+        assert lo <= d[side] * scale <= hi, \
+            f"{side} 密度 {d[side]}/{d['bars']} 根（區間 {lo}-{hi}/1000）"
 
 
 def test_density_structure_events():

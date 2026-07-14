@@ -594,25 +594,34 @@ def cmd_smc_stats(bot: Bot, args) -> int:
     """SMC 族群密度統計（v1.1 §4）：偵測層健康檢查。
 
     --out 給檔名（.json）時，順便把這段 K 線存成離線 fixture，
-    可放進 tests/fixtures/ 讓 test_smc_density.py 離線驗收。"""
+    可放進 tests/fixtures/ 讓 test_smc_density.py 離線驗收。
+    --data 給快照檔時改用它、不抓 API——調參時在同一段資料上重算，
+    密度變化才是參數造成的，不是行情換段造成的。"""
+    import json
+
     from pionexbot.smc.stats import compute_stats, format_stats
 
     symbol = (args.symbol or bot.cfg.symbol).upper()
     interval = args.interval or "15M"
     limit = args.limit or 1000
 
-    print(f"抓取 {symbol} {interval} 共 {limit} 根 K 線 ...")
-    try:
-        klines = bot.client.get_klines_history(symbol, interval, total=limit)
-    except PionexError as exc:
-        print(f"❌ 抓 K 線失敗：{exc}")
-        return 1
+    if args.data:
+        with open(args.data, encoding="utf-8") as f:
+            klines = json.load(f)
+        print(f"使用快照 {args.data}（{len(klines)} 根，離線重算）")
+    else:
+        print(f"抓取 {symbol} {interval} 共 {limit} 根 K 線 ...")
+        try:
+            klines = bot.client.get_klines_history(symbol, interval,
+                                                   total=limit)
+        except PionexError as exc:
+            print(f"❌ 抓 K 線失敗：{exc}")
+            return 1
     if len(klines) < 100:
         print(f"❌ K 線太少（{len(klines)}）")
         return 1
 
     if args.out:
-        import json
         with open(args.out, "w", encoding="utf-8") as f:
             json.dump(klines, f)
         print(f"已存 K 線快照 → {args.out}"
@@ -673,6 +682,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--grids", type=int, help="網格數量")
     parser.add_argument("--symbol", help="覆寫交易對（如 ETH_USDT），用於回測掃描")
     parser.add_argument("--out", help="smc-plot 輸出的 HTML 檔名（預設 smc.html）")
+    parser.add_argument("--data", help="smc-stats 改用 K 線快照檔（離線重算）")
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
