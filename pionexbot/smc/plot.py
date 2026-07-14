@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 from . import liquidity, ohlc, sessions, structure, zones
-from .types import Direction, StructureKind, SwingKind, ZoneKind, ZoneState
+from .types import Direction, StructureKind, SwingKind, ZoneKind
 
 ZONE_COLORS = {
     ZoneKind.OB: "rgba(46,139,87,0.25)",       # 綠：看漲訂單塊
@@ -28,11 +28,17 @@ KZ_COLORS = {"asia": "rgba(120,120,120,0.10)",
 MAX_ZONES_DRAWN = 150   # 只畫最近 N 個區域，避免圖太重；省略數會標在標題
 
 
-def build_figure(klines, smc_cfg: dict | None = None):
-    """跑全部偵測器並回傳 plotly Figure（呼叫端自行 write_html）。"""
+def build_figure(klines, smc_cfg: dict | None = None,
+                 plot_cfg: dict | None = None):
+    """跑全部偵測器並回傳 plotly Figure（呼叫端自行 write_html）。
+
+    v1.1：區域改吃 zones.detect_all（與策略同一份真相，含生命週期），
+    displacement=false 的結構事件依 plot.show_weak_events 淡色標示。"""
     import plotly.graph_objects as go
 
     cfg = smc_cfg or {}
+    pcfg = plot_cfg or {}
+    show_weak = bool(pcfg.get("show_weak_events", True))
     swing_cfg = cfg.get("swing", {})
     left = int(swing_cfg.get("left", 3))
     right = int(swing_cfg.get("right", 3))
@@ -78,31 +84,34 @@ def build_figure(klines, smc_cfg: dict | None = None):
                 mode="markers", marker={"symbol": sym, "size": 9, "color": col},
                 name=f"swing {kind.value.lower()}"))
 
-    # BOS / MSS 標籤
+    # BOS / MSS 標籤（強事件正常畫；弱事件淡色小字，供除錯）
     st = structure.detect_structure(klines, swings,
                                     break_mode=str(cfg.get("structure", {})
-                                                   .get("break_mode", "close")))
+                                                   .get("break_mode", "close")),
+                                    smc_cfg=cfg)
     for e in st.events:
-        ann.append(dict(
-            x=e.confirmed_at, y=e.broken_level,
-            text=f"{e.kind.value} {'↑' if e.direction == Direction.UP else '↓'}",
-            showarrow=True, arrowhead=2,
-            font=dict(color="green" if e.direction == Direction.UP else "red",
-                      size=11 if e.kind == StructureKind.BOS else 13)))
+        if e.displacement:
+            ann.append(dict(
+                x=e.confirmed_at, y=e.broken_level,
+                text=f"{e.kind.value} {'↑' if e.direction == Direction.UP else '↓'}",
+                showarrow=True, arrowhead=2,
+                font=dict(color="green" if e.direction == Direction.UP else "red",
+                          size=11 if e.kind == StructureKind.BOS else 13)))
+        elif show_weak:
+            ann.append(dict(
+                x=e.confirmed_at, y=e.broken_level,
+                text=f"({e.kind.value.lower()})",
+                showarrow=False, yshift=-8,
+                font=dict(color="rgba(128,128,128,0.55)", size=8)))
 
-    # 區域色塊（OB/Breaker + FVG/IFVG + BPR），只畫最近 MAX_ZONES_DRAWN 個
-    fvgs = zones.detect_fvgs(klines, float(cfg.get("fvg", {})
-                                           .get("min_size_pct", 0.0005)))
-    obs = zones.detect_obs(klines, st.events,
-                           zone_mode=str(cfg.get("ob", {}).get("zone", "full_range")))
-    bpr_cfg = cfg.get("bpr", {})
-    bprs = zones.detect_bprs(
-        fvgs, max_bars_apart=int(bpr_cfg.get("max_bars_apart", 50)))
-    # FILLED（已走完失效）的區域不畫，只看還有交易意義的
-    live = [z for z in obs + fvgs + bprs if z.state != ZoneState.FILLED]
-    all_zones = sorted(live, key=lambda z: z.created_at, reverse=True)
-    drawn = all_zones[:MAX_ZONES_DRAWN]
-    dropped = len(all_zones) - len(drawn)
+    # 區域色塊：與策略同一份真相（detect_all，含生命週期），
+    # 已移除（再穿/走完/TTL/超額）的不畫；上限 MAX_ZONES_DRAWN
+    all_active = sorted(
+        (z for z in zones.detect_all(klines, cfg, st.events)
+         if z.removed_at is None),
+        key=lambda z: z.created_at, reverse=True)
+    drawn = all_active[:MAX_ZONES_DRAWN]
+    dropped = len(all_active) - len(drawn)
     for z in drawn:
         shapes.append(dict(type="rect", x0=z.created_at,
                            x1=min(z.created_at + 30, n - 1),

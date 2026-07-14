@@ -582,10 +582,47 @@ def cmd_smc_plot(bot: Bot, args) -> int:
         print(f"❌ K 線太少（{len(klines)}）")
         return 1
 
-    fig = build_figure(klines, bot.cfg.raw.get("smc", {}))
+    fig = build_figure(klines, bot.cfg.raw.get("smc", {}),
+                       plot_cfg=bot.cfg.raw.get("plot", {}))
     fig.write_html(out)
     print(f"✅ 已輸出 {out}（{len(klines)} 根）。用瀏覽器打開，"
           "對照講義範例圖人工驗收偵測結果。")
+    return 0
+
+
+def cmd_smc_stats(bot: Bot, args) -> int:
+    """SMC 族群密度統計（v1.1 §4）：偵測層健康檢查。
+
+    --out 給檔名（.json）時，順便把這段 K 線存成離線 fixture，
+    可放進 tests/fixtures/ 讓 test_smc_density.py 離線驗收。"""
+    from pionexbot.smc.stats import compute_stats, format_stats
+
+    symbol = (args.symbol or bot.cfg.symbol).upper()
+    interval = args.interval or "15M"
+    limit = args.limit or 1000
+
+    print(f"抓取 {symbol} {interval} 共 {limit} 根 K 線 ...")
+    try:
+        klines = bot.client.get_klines_history(symbol, interval, total=limit)
+    except PionexError as exc:
+        print(f"❌ 抓 K 線失敗：{exc}")
+        return 1
+    if len(klines) < 100:
+        print(f"❌ K 線太少（{len(klines)}）")
+        return 1
+
+    if args.out:
+        import json
+        with open(args.out, "w", encoding="utf-8") as f:
+            json.dump(klines, f)
+        print(f"已存 K 線快照 → {args.out}"
+              "（放進 tests/fixtures/ 供離線密度測試）")
+
+    stats = compute_stats(klines, bot.cfg.raw.get("smc", {}))
+    print(f"\n=== SMC 密度統計（{symbol} {interval}×{len(klines)}）===")
+    print(format_stats(stats))
+    print("\n判讀：對照 tests/test_smc_density.py 的校準區間；"
+          "門檻值只能因密度/視覺證據而改，不得因回測績效而改（§6 紀律）。")
     return 0
 
 
@@ -622,7 +659,8 @@ def main(argv: list[str] | None = None) -> int:
                                  "backtest", "backtest-sweep", "optimize",
                                  "grid-backtest", "grid-compare",
                                  "dca-backtest", "symbol-info", "notify-test",
-                                 "smc-plot", "run-ict", "ict-backtest"])
+                                 "smc-plot", "smc-stats", "run-ict",
+                                 "ict-backtest"])
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--quote", type=float, help="買入金額（報價幣）")
     parser.add_argument("--base", type=float, help="賣出數量（基礎幣）")
@@ -674,6 +712,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_notify_test(bot)
         if args.command == "smc-plot":
             return cmd_smc_plot(bot, args)
+        if args.command == "smc-stats":
+            return cmd_smc_stats(bot, args)
         if args.command == "run-ict":
             return cmd_run_ict(bot)
         if args.command == "ict-backtest":

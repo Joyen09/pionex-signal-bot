@@ -124,14 +124,22 @@ smc:                    # SMC 偵測模組（Smart Money Concepts）參數
     right: 3            # 右側根數（右側收盤後才「確認」，防未來函數）
   structure:
     break_mode: close   # close = 收盤突破才算 | wick = 影線碰到就算
+    # v1.1 位移門檻：突破要有「位移品質」才算可交易事件（狀態機不受影響）
+    min_displacement_atr: 0.5 # 突破 K 實體 ≥ 此倍數 × ATR(14) 才算強
+    displacement_mode: either # atr = 只看實體 | fvg = 推進段含合格 FVG | either
   liquidity:
     eq_tolerance_pct: 0.001   # 等高/等低合併容忍度（0.1%）
     sweep_mode: wick          # wick = 單根收針 | reclaim = 收盤收回
     max_reclaim_bars: 3
   fvg:
     min_size_pct: 0.0005      # 缺口最小寬度（佔現價比例），太小的雜訊不算
-  bpr:
-    max_bars_apart: 50        # 兩個 FVG 相距超過此根數不配對成 BPR（防組合爆炸）
+  bpr:                        # v1.1 五規則（修 v1.0 組合爆炸：10 天 300+ 雜訊細條）
+    max_gap_bars: 20          # 兩個反向 FVG 間隔超過此根數不配對
+    require_overlap_leg: true # 第二個 FVG 的位移 K 必須實際走完第一個 FVG 區域
+    dedup_overlap_pct: 0.5    # 與既有 BPR 重疊比例超過此值 → 只留較新者
+  zones:                      # v1.1 生命週期（plot 與策略共用同一真相）
+    max_age_bars: 200         # 區域存活上限（15M ≈ 2 天），逾齡移除
+    max_active_per_kind: 8    # 同 kind 活躍區域上限，超過移除最舊
   ob:
     zone: full_range          # full_range = 整根 K | body = 只算實體
   fib:
@@ -141,6 +149,9 @@ smc:                    # SMC 偵測模組（Smart Money Concepts）參數
     asia:    ["20:00", "00:00"]
     london:  ["03:00", "06:00"]
     newyork: ["09:00", "11:00"]
+
+plot:                     # smc-plot 視覺化選項
+  show_weak_events: true  # displacement=false 的 BOS/MSS 用淡色小字畫出（除錯用）
 
 webhook:
   host: 0.0.0.0

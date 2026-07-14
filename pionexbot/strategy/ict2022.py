@@ -92,8 +92,9 @@ def find_setup(htf_klines, trigger_klines, cfg: dict,
         _block("killzone 外")
         return None
 
-    # 1) HTF 偏向：結構 UP 才做多
-    st_h = structure.detect_structure(htf_klines, left=left, right=right)
+    # 1) HTF 偏向：結構 UP 才做多（狀態機不分位移強弱——偏向要即時翻面）
+    st_h = structure.detect_structure(htf_klines, left=left, right=right,
+                                      smc_cfg=sc)
     if not st_h.trend or st_h.trend[-1] != Direction.UP:
         _block("HTF 非多頭")
         return None
@@ -122,11 +123,12 @@ def find_setup(htf_klines, trigger_klines, cfg: dict,
             return None
     sweep = max(recent, key=lambda s: s.confirmed_at)
 
-    # 3) sweep 之後的看漲 MSS
-    st_t = structure.detect_structure(trigger_klines, swings)
+    # 3) sweep 之後的看漲 MSS（v1.1：只認 displacement=true 的事件——
+    #    弱勢突破在盤整裡大量出現，不是機構換手的證據）
+    st_t = structure.detect_structure(trigger_klines, swings, smc_cfg=sc)
     mss_list = [e for e in st_t.events
                 if e.kind == StructureKind.MSS and e.direction == Direction.UP
-                and e.confirmed_at >= sweep.confirmed_at]
+                and e.confirmed_at >= sweep.confirmed_at and e.displacement]
     if not mss_list:
         _block("sweep 後無看漲 MSS")
         return None
@@ -154,16 +156,13 @@ def find_setup(htf_klines, trigger_klines, cfg: dict,
     ote_lo, ote_hi = zones.ote_band(range_high, range_low,
                                     tuple(sc.get("fib", {}).get("ote", (0.62, 0.79))))
 
-    # 進場區域：sweep 之後形成、看漲、未失效、CE 在 Discount 半區
-    fvgs = zones.detect_fvgs(trigger_klines,
-                             float(sc.get("fvg", {}).get("min_size_pct", 0.0005)))
-    obs = zones.detect_obs(trigger_klines, st_t.events,
-                           zone_mode=str(sc.get("ob", {}).get("zone", "full_range")))
-    bprs = zones.detect_bprs(
-        fvgs, max_bars_apart=int(sc.get("bpr", {}).get("max_bars_apart", 50)))
-    cands = [z for z in bprs + fvgs + obs
+    # 進場區域：sweep 之後形成、看漲、活躍（未移除/未過 TTL）、CE 在 Discount
+    # 半區。detect_all = 單一真相來源（生命週期、BPR 五規則、同類上限都在裡面）
+    now = len(trigger_klines) - 1
+    cands = [z for z in zones.detect_all(trigger_klines, sc, st_t.events)
              if z.direction == Direction.UP
              and z.state in (ZoneState.FRESH, ZoneState.TESTED)
+             and z.is_active(now)
              and z.created_at >= sweep.confirmed_at
              and z.ce <= ceiling]
     if not cands:
@@ -215,5 +214,8 @@ def find_setup(htf_klines, trigger_klines, cfg: dict,
               "zone_kind": zone.kind.value,
               "in_ote": in_ote(zone),
               "killzone": killzone or "",
-              "rr_tp1": round(rr, 2)},
+              "rr_tp1": round(rr, 2),
+              # v1.1 診斷：setup 成立當下的候選區域數。
+              # 修正後應為個位數；幾十個代表選區形同隨機（退化未修好）
+              "candidates": len(cands)},
     )

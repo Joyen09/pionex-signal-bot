@@ -51,6 +51,7 @@ class IctReport:
     setups_placed: int = 0
     setups_expired: int = 0
     funnel: dict = field(default_factory=dict)
+    candidate_counts: list = field(default_factory=list)  # 各 setup 成立時的候選區域數
 
     def _funnel_text(self) -> str:
         if not self.funnel:
@@ -60,12 +61,20 @@ class IctReport:
         seg = "\n".join(f"  {k}：{v}（{v/total*100:.0f}%）" for k, v in rows)
         return f"\n漏斗診斷（評估 {total} 次，各關卡擋掉次數）：\n{seg}"
 
+    def _candidates_text(self) -> str:
+        if not self.candidate_counts:
+            return ""
+        cc = sorted(self.candidate_counts)
+        med = cc[len(cc) // 2]
+        return (f"\nsetup 當下候選區域數：中位數 {med}、最大 {cc[-1]}"
+                "（v1.1 修正後應為個位數）")
+
     def summary(self) -> str:
         closed = [t for t in self.trades if t.closed]
         if not closed:
             return (f"K 線 {self.bars} 根，掛單 {self.setups_placed} 次"
                     f"（{self.setups_expired} 次失效撤單），無成交。"
-                    + self._funnel_text())
+                    + self._candidates_text() + self._funnel_text())
         rs = [t.r for t in closed]
         wins = [r for r in rs if r > 0]
         losses = [r for r in rs if r <= 0]
@@ -91,7 +100,7 @@ class IctReport:
                     f"{k}: {sum(v)/len(v):+.2f}R×{len(v)}"
                     for k, v in sorted(groups.items()))
                 lines.append(f"  依 {tag}：{seg}")
-        return "\n".join(lines)
+        return "\n".join(lines) + self._candidates_text()
 
 
 def backtest_ict2022(entry_k, trigger_k, htf_k,
@@ -217,5 +226,7 @@ def backtest_ict2022(entry_k, trigger_k, htf_k,
                 pending_bar = i
                 pending_trig_len = len(trig)
                 rep.setups_placed += 1
+                rep.candidate_counts.append(
+                    int(s.tags.get("candidates", 0)))
 
     return rep

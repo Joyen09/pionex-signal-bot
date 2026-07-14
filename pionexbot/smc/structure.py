@@ -14,6 +14,41 @@ from . import ohlc
 from .types import Direction, StructureEvent, StructureKind, SwingKind, SwingPoint
 
 
+def _atr_series(klines, period: int = 14) -> list[float]:
+    """逐根 ATR（簡單平均，根數不足時用現有均值）。只看過去，無未來函數。"""
+    atrs: list[float] = []
+    trs: list[float] = []
+    prev_close: float | None = None
+    for k in klines:
+        hi, lo, cl = ohlc.h(k), ohlc.l(k), ohlc.c(k)
+        tr = hi - lo if prev_close is None else max(
+            hi - lo, abs(hi - prev_close), abs(lo - prev_close))
+        trs.append(tr)
+        window = trs[-period:]
+        atrs.append(sum(window) / len(window))
+        prev_close = cl
+    return atrs
+
+
+def _has_fvg_in(klines, start: int, end: int, direction: Direction,
+                min_size_pct: float) -> bool:
+    """[start, end] 推進段內是否含至少一個「事件同向」的合格 FVG。"""
+    for i in range(max(start + 2, 2), min(end, len(klines) - 1) + 1):
+        c1, c3 = klines[i - 2], klines[i]
+        px = ohlc.c(c3)
+        if px <= 0:
+            continue
+        if direction == Direction.UP and ohlc.l(c3) > ohlc.h(c1):
+            top, bottom = ohlc.l(c3), ohlc.h(c1)
+        elif direction == Direction.DOWN and ohlc.h(c3) < ohlc.l(c1):
+            top, bottom = ohlc.l(c1), ohlc.h(c3)
+        else:
+            continue
+        if (top - bottom) / px >= min_size_pct:
+            return True
+    return False
+
+
 def find_swings(klines, left: int = 3, right: int = 3) -> list[SwingPoint]:
     """分形 swing：high[i] 嚴格大於左 L、右 R 根內所有 high（等高不成立）。"""
     n = len(klines)
@@ -44,14 +79,37 @@ class StructureState:
 
 def detect_structure(klines, swings: Optional[list[SwingPoint]] = None,
                      left: int = 3, right: int = 3,
-                     break_mode: str = "close") -> StructureState:
+                     break_mode: str = "close",
+                     smc_cfg: Optional[dict] = None) -> StructureState:
     """逐根走一遍 K 線，輸出 BOS / MSS 事件與趨勢序列。
 
     - BOS：順勢收盤突破「最近一個已確認、且尚未被突破」的 swing。
     - MSS：收盤跌破本段趨勢的成本區（protective swing）→ 趨勢翻轉。
     - UNDEFINED 起始：第一次突破任一已確認 swing 即定調（記為 BOS）。
+    - displacement（v1.1）：每個事件標注位移品質（smc.structure 設定），
+      狀態機本身不受影響——弱勢突破照樣翻面，只是事件被標為弱。
     """
     swings = swings if swings is not None else find_swings(klines, left, right)
+    sc = smc_cfg or {}
+    st_cfg = sc.get("structure", {})
+    disp_mode = str(st_cfg.get("displacement_mode", "either"))
+    disp_atr = float(st_cfg.get("min_displacement_atr", 0.5))
+    fvg_min = float(sc.get("fvg", {}).get("min_size_pct", 0.0005))
+    atrs = _atr_series(klines)
+
+    def _displaced(i: int, direction: Direction,
+                   seg_start: Optional[int]) -> bool:
+        k = klines[i]
+        body_ok = abs(ohlc.c(k) - ohlc.o(k)) >= disp_atr * atrs[i] \
+            if atrs[i] > 0 else True
+        if disp_mode == "atr":
+            return body_ok
+        start = seg_start if seg_start is not None else max(0, i - 10)
+        fvg_ok = _has_fvg_in(klines, start, i, direction, fvg_min)
+        if disp_mode == "fvg":
+            return fvg_ok
+        return body_ok or fvg_ok      # either
+
     st = StructureState()
     trend: Optional[Direction] = None
 
@@ -85,7 +143,10 @@ def detect_structure(klines, swings: Optional[list[SwingPoint]] = None,
                 and dn_px < st.protective_low.price:
             st.events.append(StructureEvent(
                 StructureKind.MSS, Direction.DOWN, st.protective_low.price,
-                st.protective_low, confirmed_at=i, time=ohlc.t(k)))
+                st.protective_low, confirmed_at=i, time=ohlc.t(k),
+                displacement=_displaced(
+                    i, Direction.DOWN,
+                    recent_high.index if recent_high else None)))
             trend = Direction.DOWN
             st.protective_low = None
             st.protective_high = recent_high
@@ -94,7 +155,10 @@ def detect_structure(klines, swings: Optional[list[SwingPoint]] = None,
                 and up_px > st.protective_high.price:
             st.events.append(StructureEvent(
                 StructureKind.MSS, Direction.UP, st.protective_high.price,
-                st.protective_high, confirmed_at=i, time=ohlc.t(k)))
+                st.protective_high, confirmed_at=i, time=ohlc.t(k),
+                displacement=_displaced(
+                    i, Direction.UP,
+                    recent_low.index if recent_low else None)))
             trend = Direction.UP
             st.protective_high = None
             st.protective_low = recent_low
@@ -105,7 +169,10 @@ def detect_structure(klines, swings: Optional[list[SwingPoint]] = None,
                 and trend in (None, Direction.UP):
             st.events.append(StructureEvent(
                 StructureKind.BOS, Direction.UP, last_high.price,
-                last_high, confirmed_at=i, time=ohlc.t(k)))
+                last_high, confirmed_at=i, time=ohlc.t(k),
+                displacement=_displaced(
+                    i, Direction.UP,
+                    recent_low.index if recent_low else None)))
             trend = Direction.UP
             st.protective_low = recent_low   # 造成這次 BOS 的 higher-low
             last_high = None                 # 破掉的不再重複觸發
@@ -113,7 +180,10 @@ def detect_structure(klines, swings: Optional[list[SwingPoint]] = None,
                 and trend in (None, Direction.DOWN):
             st.events.append(StructureEvent(
                 StructureKind.BOS, Direction.DOWN, last_low.price,
-                last_low, confirmed_at=i, time=ohlc.t(k)))
+                last_low, confirmed_at=i, time=ohlc.t(k),
+                displacement=_displaced(
+                    i, Direction.DOWN,
+                    recent_high.index if recent_high else None)))
             trend = Direction.DOWN
             st.protective_high = recent_high
             last_low = None
