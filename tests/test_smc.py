@@ -155,7 +155,11 @@ def test_ob_is_last_bearish_candle_before_up_break():
         bar(10.2, 10.3, 9.5, 9.7),     # 最後一根收黑 → OB 候選
         bar(9.8, 10.9, 9.8, 10.8),     # 收盤破 10.5 → BOS UP @3
     ]
-    st = structure.detect_structure(ks, left=1, right=1)
+    # 本測試只驗 OB 回溯邏輯；4 根迷你劇本湊不出推進段 FVG，
+    # 位移判定用 atr 模式（大實體突破 → 強事件）
+    st = structure.detect_structure(
+        ks, left=1, right=1,
+        smc_cfg={"structure": {"displacement_mode": "atr"}})
     obs = zones.detect_obs(ks, st.events)
     assert len(obs) == 1
     z = obs[0]
@@ -273,6 +277,30 @@ def test_displacement_flag_atr_mode():
     strong = structure.detect_structure(_breakout_fixture(True),
                                         left=1, right=1, smc_cfg=cfg)
     assert strong.events[0].displacement, "大實體突破 → displacement=true"
+
+
+def test_displacement_fvg_threshold_is_independent_param():
+    """位移判定的合格 FVG 門檻（0.15%）獨立於區域偵測的 fvg.min_size_pct
+    （0.05%）——沿用後者會讓閘門形同虛設（2026-07-14 密度實測）。"""
+    ks = [
+        bar(100.0, 100.5, 99.5, 100.2),
+        bar(100.2, 101.0, 100.1, 100.8),    # swing high 101 @1（conf 2）
+        bar(100.8, 100.9, 99.95, 100.1),    # swing low 99.95 @2（conf 3）
+        bar(100.1, 100.6, 100.0, 100.5),
+        bar(100.5, 100.9, 100.45, 100.85),
+        bar(100.85, 101.3, 100.68, 101.2),  # 收破 101 → BOS；腿內 FVG 寬 0.079%
+    ]
+    strict = structure.detect_structure(
+        ks, left=1, right=1,
+        smc_cfg={"structure": {"displacement_mode": "fvg"}})
+    assert len(strict.events) == 1 and not strict.events[0].displacement, \
+        "腿內 FVG 0.079% 低於位移門檻 0.15% → 弱事件"
+    loose = structure.detect_structure(
+        ks, left=1, right=1,
+        smc_cfg={"structure": {"displacement_mode": "fvg",
+                               "displacement_fvg_min_pct": 0.0005}})
+    assert loose.events[0].displacement, \
+        "調低 displacement_fvg_min_pct 應能獨立放行，與 fvg.min_size_pct 無關"
 
 
 def test_weak_events_do_not_spawn_obs():

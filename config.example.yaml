@@ -125,8 +125,11 @@ smc:                    # SMC 偵測模組（Smart Money Concepts）參數
   structure:
     break_mode: close   # close = 收盤突破才算 | wick = 影線碰到就算
     # v1.1 位移門檻：突破要有「位移品質」才算可交易事件（狀態機不受影響）
-    min_displacement_atr: 0.5 # 突破 K 實體 ≥ 此倍數 × ATR(14) 才算強
-    displacement_mode: either # atr = 只看實體 | fvg = 推進段含合格 FVG | either
+    displacement_mode: fvg    # atr = 只看實體 | fvg = 推進段含合格 FVG | either
+    min_displacement_atr: 0.5 # atr/either 模式：突破 K 實體 ≥ 此倍數 × ATR(14)
+    displacement_fvg_min_pct: 0.0015  # fvg/either 模式：推進段合格 FVG 的最小寬度
+                              # （獨立於 fvg.min_size_pct——區域偵測維持 0.0005；
+                              #  沿用會讓閘門形同虛設，2026-07-14 密度實測校準）
   liquidity:
     eq_tolerance_pct: 0.001   # 等高/等低合併容忍度（0.1%）
     sweep_mode: wick          # wick = 單根收針 | reclaim = 收盤收回

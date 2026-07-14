@@ -92,9 +92,12 @@ def detect_structure(klines, swings: Optional[list[SwingPoint]] = None,
     swings = swings if swings is not None else find_swings(klines, left, right)
     sc = smc_cfg or {}
     st_cfg = sc.get("structure", {})
-    disp_mode = str(st_cfg.get("displacement_mode", "either"))
+    disp_mode = str(st_cfg.get("displacement_mode", "fvg"))
     disp_atr = float(st_cfg.get("min_displacement_atr", 0.5))
-    fvg_min = float(sc.get("fvg", {}).get("min_size_pct", 0.0005))
+    # 位移判定的「合格 FVG」門檻是獨立參數——比區域偵測的 fvg.min_size_pct
+    # 嚴格 3 倍。沿用 0.05% 會讓推進段幾乎總能撈到一個小缺口，閘門形同虛設
+    # （實測 BTC 15M×1000：19 個 MSS 全數判強、0 個弱）。
+    fvg_min = float(st_cfg.get("displacement_fvg_min_pct", 0.0015))
     atrs = _atr_series(klines)
 
     def _displaced(i: int, direction: Direction,
