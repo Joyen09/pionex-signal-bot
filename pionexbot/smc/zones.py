@@ -99,7 +99,6 @@ def detect_obs(klines, events: list[StructureEvent],
 def _advance_states(zones: list[Zone], klines,
                     max_age_bars: Optional[int] = 200) -> None:
     for z in zones:
-        flips = 0
         for i in range(z.created_at + 1, len(klines)):
             if max_age_bars is not None and i - z.created_at > max_age_bars:
                 z.removed_at = i                 # TTL：逾齡移除
@@ -114,13 +113,21 @@ def _advance_states(zones: list[Zone], klines,
                 closed_through = cl > z.top
                 swept_through = hi >= z.top
 
-            if closed_through:
-                if z.kind == ZoneKind.BPR or flips >= 1:
-                    # BPR 不翻轉；其他區域只翻一次，再次收盤穿越 → 移除
+            if z.kind == ZoneKind.BPR:
+                # BPR 特例（v1.1 抽查修正）：收盤穿越「任一」遠端 → 直接死，
+                # 不翻轉——多空交戰區被任一方決定性收穿即分出勝負、失去意義
+                if cl < z.bottom or cl > z.top:
+                    z.state = ZoneState.FILLED
                     z.state_changed_at = i
                     z.removed_at = i
                     break
-                flips = 1
+            elif closed_through:
+                if z.flips >= 1:                 # 只翻一次，再次收穿 → 移除
+                    z.state = ZoneState.FILLED
+                    z.state_changed_at = i
+                    z.removed_at = i
+                    break
+                z.flips = 1
                 z.state = ZoneState.FLIPPED
                 z.state_changed_at = i
                 z.direction = (Direction.DOWN if z.direction == Direction.UP
@@ -129,14 +136,14 @@ def _advance_states(zones: list[Zone], klines,
                     z.kind = ZoneKind.BREAKER
                 elif z.kind == ZoneKind.FVG:
                     z.kind = ZoneKind.IFVG
-                continue                         # 翻轉後繼續追蹤（等再穿或 TTL）
+                continue                         # 翻轉後繼續追蹤（第二生命）
             if swept_through and z.state == ZoneState.TESTED:
-                z.state = ZoneState.FILLED
+                z.state = ZoneState.FILLED       # 影線走完規則（第二生命也適用）
                 z.state_changed_at = i
                 z.removed_at = i                 # 走完 = 不再有交易意義
                 break
-            if touched and z.state == ZoneState.FRESH:
-                z.state = ZoneState.TESTED
+            if touched and z.state in (ZoneState.FRESH, ZoneState.FLIPPED):
+                z.state = ZoneState.TESTED       # 第二生命的觸及同樣記 TESTED
                 z.state_changed_at = i
 
 

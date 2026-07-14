@@ -109,6 +109,7 @@ class Zone:
     # 生命週期（v1.1）：翻轉後再次收盤穿越 / 走完 / 逾齡 / 同類超額 → 移除。
     # None = 目前仍活躍。移除後不再是策略候選、plot 也不畫（單一真相來源）。
     removed_at: Optional[int] = None
+    flips: int = 0             # 已翻轉次數（FVG→IFVG / OB→Breaker 最多一次）
 
     @property
     def ce(self) -> float:

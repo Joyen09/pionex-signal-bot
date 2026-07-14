@@ -117,18 +117,20 @@ def test_find_setup_respects_killzone_filter():
                       killzone=None) is None, "時段外不掛新單"
 
 
-def test_require_ote_hard_condition_picks_ote_zone():
+def test_require_ote_hard_condition_blocks_non_ote():
     """require_ote=true：CE 不在 OTE 帶的區域直接淘汰。
-    劇本中 BPR（CE=99.75）在 OTE 帶外、FVG（CE=99.2）在帶內——
-    預設選優先權高的 BPR，開硬條件後應改選 FVG。"""
-    smc_cfg = {"swing": {"left": 1, "right": 1}, "fvg": {"min_size_pct": 0.0001}}
+    把 OTE 帶調窄（0.74–0.79）讓劇本 FVG（CE=99.2）落帶外——
+    預設照常成立（in_ote=False），開硬條件後應整個擋下。"""
+    smc_cfg = {"swing": {"left": 1, "right": 1}, "fvg": {"min_size_pct": 0.0001},
+               "fib": {"ote": (0.74, 0.79)}}
     base = {"min_rr_tp1": 0.5, "killzone_filter": False}
     s0 = find_setup(_uptrend_htf(), _setup_trigger(), base, smc_cfg)
-    assert s0.tags["zone_kind"] == "BPR" and not s0.tags["in_ote"]
-    s1 = find_setup(_uptrend_htf(), _setup_trigger(),
-                    {**base, "require_ote": True}, smc_cfg)
-    assert s1 is not None and s1.tags["zone_kind"] == "FVG"
-    assert s1.tags["in_ote"] and abs(s1.limit_price - 99.2) < 1e-9
+    assert s0 is not None and not s0.tags["in_ote"]
+    funnel = {}
+    assert find_setup(_uptrend_htf(), _setup_trigger(),
+                      {**base, "require_ote": True}, smc_cfg,
+                      funnel=funnel) is None
+    assert funnel.get("OTE 外") == 1
 
 
 def test_sweep_sources_filters_pool_kind():
@@ -218,11 +220,12 @@ def test_backtest_e2e_fill_and_take_profit():
     assert len(closed) == 1, f"應有一筆成交並出場，實際 {len(closed)}"
     t = closed[0]
     assert t.exit_reason == "tp_all", f"應以 TP 全出，實際 {t.exit_reason}"
-    # 優先權 BPR > FVG：下跌段的看跌 FVG 與反攻的看漲 FVG 疊出 BPR（CE=99.75），
-    # 策略應選 BPR 而非單獨的 FVG（CE=99.2）
-    assert t.tags["zone_kind"] == "BPR", f"應選 BPR，實際 {t.tags['zone_kind']}"
-    assert abs(t.entry - 99.75) < 1e-6, "應以 BPR 的 CE 成交"
-    assert 1.2 < t.r < 2.0, f"R 應約 1.5（102.5/103 分批出、扣手續費），實際 {t.r:.2f}"
+    # v1.1 生命週期：MSS 腿疊出的 BPR（CE=99.75）在其後的拉升段被收盤穿越
+    # 上緣 → 已死（BPR 收穿任一遠端即移除），策略正確改選 FVG（CE=99.2）
+    assert t.tags["zone_kind"] == "FVG", f"應選 FVG，實際 {t.tags['zone_kind']}"
+    assert abs(t.entry - 99.2) < 1e-6, "應以 FVG 的 CE 成交"
+    assert t.tags["candidates"] <= 3, "候選區域數應為個位數（v1.1 儀器指標）"
+    assert 2.2 < t.r < 2.7, f"R 應約 2.5（102.5/103 分批出、扣手續費），實際 {t.r:.2f}"
 
 
 def test_backtest_runs_and_reports():

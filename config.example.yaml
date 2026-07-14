@@ -154,6 +154,8 @@ smc:                    # SMC 偵測模組（Smart Money Concepts）參數
     asia:    ["20:00", "00:00"]
     london:  ["03:00", "06:00"]
     newyork: ["09:00", "11:00"]
+    # 2026-07-14 抽查疑點澄清：NY 帶實測 8 根 15M（=2 小時，正確）；
+    # 圖上 12 根（3 小時）的帶是 London（03:00–06:00），非 NY 筆誤
 
 plot:                     # smc-plot 視覺化選項
   show_weak_events: true  # displacement=false 的 BOS/MSS 用淡色小字畫出（除錯用）
