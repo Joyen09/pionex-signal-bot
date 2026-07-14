@@ -558,6 +558,109 @@ def cmd_ict_backtest(bot: Bot, args) -> int:
     return 0
 
 
+def _binance_fetch_and_backtest(client, symbol, p, smc_cfg, cfg,
+                                start_ms, end_ms):
+    """抓幣安三時框 [start, end]（trigger/HTF 多抓暖身段）跑一段回測。"""
+    from pionexbot.backtest_ict import (HTF_WINDOW, TRIGGER_WINDOW,
+                                        backtest_ict2022)
+    from pionexbot.smc.mtf import interval_ms
+
+    e_int, t_int, h_int = p["entry_interval"], p["trigger_interval"], p["htf_interval"]
+    # 暖身：trigger/HTF 要在 entry 段開始前就有足夠歷史建立結構
+    lead = max(HTF_WINDOW * interval_ms(h_int),
+               TRIGGER_WINDOW * interval_ms(t_int))
+    entry_k = client.get_klines_range(symbol, e_int, start_ms, end_ms)
+    trig_k = client.get_klines_range(symbol, t_int, start_ms - lead, end_ms)
+    htf_k = client.get_klines_range(symbol, h_int, start_ms - lead, end_ms)
+    if len(entry_k) < 500:
+        return None, entry_k
+    rep = backtest_ict2022(
+        entry_k, trig_k, htf_k, ict_cfg=p, smc_cfg=smc_cfg,
+        sessions_cfg=smc_cfg.get("sessions"),
+        slippage_pct=float(cfg.raw.get("backtest", {}).get("slippage_pct", 0.0)),
+        breakeven_after_tp=int(cfg.risk.get("breakeven_after_tp", 1)),
+        breakeven_offset_pct=float(cfg.risk.get("breakeven_offset_pct", 0.001)),
+    )
+    return rep, entry_k
+
+
+# 預設三段（依 HANDOFF：2024 多頭 / 2025 盤整 / 2026 熊市）；--start/--end 可覆寫
+_DEFAULT_SEGMENTS = [
+    ("2024 多頭", "2024-01-01", "2025-01-01"),
+    ("2025 盤整", "2025-01-01", "2026-01-01"),
+    ("2026 熊市", "2026-01-01", "2026-07-14"),
+]
+
+
+def cmd_binance_backtest(bot: Bot, args) -> int:
+    """幣安長歷史回測（分段檢定）：解決派網 35 天樣本不足。
+
+    預設跑三段市場週期各自檢定；--start/--end 給單一自訂區間。
+    判準與派網一致（≥20 筆且 E 明顯>0，零滑價視為上界），且此處
+    嚴禁改動任何偵測層凍結參數——只換資料源。"""
+    from datetime import datetime, timezone
+
+    from pionexbot.binance_client import BinanceClient, BinanceError
+    from pionexbot.strategy.ict2022 import DEFAULTS
+
+    cfg = bot.cfg
+    p = {**DEFAULTS, **cfg.strategy.get("ict2022", {})}
+    smc_cfg = cfg.raw.get("smc", {})
+    symbol = (args.symbol or cfg.symbol).upper()
+    client = BinanceClient()
+
+    def _to_ms(date_str: str) -> int:
+        dt = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1000)
+
+    if args.start or args.end:
+        end = args.end or _DEFAULT_SEGMENTS[-1][2]
+        segments = [(f"{args.start}~{end}", args.start, end)]
+    else:
+        segments = _DEFAULT_SEGMENTS
+
+    print(f"幣安長歷史回測 {symbol}（entry {p['entry_interval']}）——"
+          "只換資料源，偵測層參數凍結不動。\n")
+    all_trades = []
+    for label, s, e in segments:
+        print(f"── {label}（{s} → {e}）抓取中 ...")
+        try:
+            rep, entry_k = _binance_fetch_and_backtest(
+                client, symbol, p, smc_cfg, cfg, _to_ms(s), _to_ms(e))
+        except BinanceError as exc:
+            print(f"   ❌ 抓 K 線失敗：{exc}\n")
+            continue
+        if rep is None:
+            print(f"   ⚠ entry K 線太少（{len(entry_k)}），跳過\n")
+            continue
+        closed = [t for t in rep.trades if t.closed]
+        all_trades.extend(closed)
+        print(f"   entry {p['entry_interval']}×{len(entry_k)}")
+        print("   " + rep.summary().replace("\n", "\n   ") + "\n")
+
+    # 跨段合計（判準看的是總樣本）
+    if all_trades:
+        rs = [t.r for t in all_trades]
+        wins = [r for r in rs if r > 0]
+        wr = len(wins) / len(rs)
+        avg_w = sum(wins) / len(wins) if wins else 0.0
+        losses = [r for r in rs if r <= 0]
+        avg_l = abs(sum(losses) / len(losses)) if losses else 0.0
+        e_val = wr * avg_w - (1 - wr) * avg_l
+        print(f"═══ 跨段合計：{len(rs)} 筆　勝率 {wr*100:.0f}%　"
+              f"E = {e_val:+.3f}R/筆　累積 {sum(rs):+.2f}R")
+        verdict = ("✅ 達判準（≥20 筆且 E>0）→ 可考慮 paper forward"
+                   if len(rs) >= 20 and e_val > 0
+                   else ("❌ ≥20 筆但 E 未明顯>0 → 乾淨否定、收案"
+                         if len(rs) >= 20
+                         else "⚠ 仍 <20 筆 → 樣本不足，延長歷史或 paper 前瞻"))
+        print(f"    {verdict}")
+    else:
+        print("═══ 跨段合計：0 筆成交。")
+    print("\n判讀：零滑價為上界，請保守打折；此指令不得調整偵測層凍結參數。")
+    return 0
+
+
 def cmd_smc_plot(bot: Bot, args) -> int:
     """SMC 視覺化驗收（規格 §5.1）：K 線 + swing/BOS/MSS/區域/sweep/killzone。"""
     try:
@@ -669,7 +772,7 @@ def main(argv: list[str] | None = None) -> int:
                                  "grid-backtest", "grid-compare",
                                  "dca-backtest", "symbol-info", "notify-test",
                                  "smc-plot", "smc-stats", "run-ict",
-                                 "ict-backtest"])
+                                 "ict-backtest", "binance-backtest"])
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--quote", type=float, help="買入金額（報價幣）")
     parser.add_argument("--base", type=float, help="賣出數量（基礎幣）")
@@ -683,6 +786,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--symbol", help="覆寫交易對（如 ETH_USDT），用於回測掃描")
     parser.add_argument("--out", help="smc-plot 輸出的 HTML 檔名（預設 smc.html）")
     parser.add_argument("--data", help="smc-stats 改用 K 線快照檔（離線重算）")
+    parser.add_argument("--start", help="binance-backtest 自訂區間起日 YYYY-MM-DD")
+    parser.add_argument("--end", help="binance-backtest 自訂區間迄日 YYYY-MM-DD")
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -728,6 +833,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_run_ict(bot)
         if args.command == "ict-backtest":
             return cmd_ict_backtest(bot, args)
+        if args.command == "binance-backtest":
+            return cmd_binance_backtest(bot, args)
         if args.command == "buy":
             return cmd_manual(bot, Action.BUY, args.quote or
                               float(cfg.trading.get("quote_per_trade", 20)), None)
