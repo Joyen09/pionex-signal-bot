@@ -160,6 +160,11 @@ smc:                    # SMC 偵測模組（Smart Money Concepts）參數
 plot:                     # smc-plot 視覺化選項
   show_weak_events: true  # displacement=false 的 BOS/MSS 用淡色小字畫出（除錯用）
 
+backtest:                 # 回測共用設定（頂層區段，不在 strategy 底下）
+  slippage_pct: 0.0       # ict-backtest/binance-backtest 的滑價（0.001 = 0.1%）
+  # binance_base_url:     # 幣安端點；留空 = 預設 data-api.binance.vision（免地區限制）
+                          # 地區限制時可設 https://api-gcp.binance.com 等；勿用 binance.us
+
 webhook:
   host: 0.0.0.0
   port: 8080

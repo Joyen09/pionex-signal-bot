@@ -29,6 +29,18 @@ class BinanceError(Exception):
 class BinanceClient:
     MAX_KLINES_PER_REQUEST = 1000   # 幣安單次上限
 
+    # 主站 api.binance.com 對部分地區回 451（地區限制）。
+    # data-api.binance.vision 是幣安官方的「公開行情專用」端點：免金鑰、
+    # 無地區限制、資料與主站一致——長歷史回測的正解。全部同一份全球資料集
+    # （不含 binance.us，那是不同資料集，混用會汙染回測）。
+    DEFAULT_HOST = "https://data-api.binance.vision"
+    FALLBACK_HOSTS = [
+        "https://data-api.binance.vision",
+        "https://api-gcp.binance.com",
+        "https://api.binance.com",
+        "https://api1.binance.com",
+    ]
+
     # 我們的週期代號 → 幣安代號（幣安用小寫、1 小時是 1h 不是 60M）
     _INTERVAL_MAP = {
         "1M": "1m", "3M": "3m", "5M": "5m", "15M": "15m", "30M": "30m",
@@ -37,14 +49,24 @@ class BinanceClient:
         "1MON": "1M",   # 幣安的「月」才是大寫 1M——別和我們的「分鐘」搞混
     }
 
-    def __init__(self, base_url: str = "https://api.binance.com",
+    def __init__(self, base_url: Optional[str] = None,
                  timeout: float = 15.0,
                  session: Optional[requests.Session] = None,
                  max_retries: int = 4):
-        self.base_url = base_url.rstrip("/")
+        self.base_url = (base_url or self.DEFAULT_HOST).rstrip("/")
         self.timeout = timeout
         self.session = session or requests.Session()
         self.max_retries = max_retries
+
+    def _hosts(self) -> list[str]:
+        """優先用指定 base_url，再依序試備援 host（去重、保順序）。"""
+        seen, out = set(), []
+        for h in [self.base_url] + self.FALLBACK_HOSTS:
+            h = h.rstrip("/")
+            if h not in seen:
+                seen.add(h)
+                out.append(h)
+        return out
 
     # ------------------------------------------------------------------ #
     # 週期 / 交易對 正規化
@@ -65,24 +87,34 @@ class BinanceClient:
     # 底層請求（帶指數退避重試）
     # ------------------------------------------------------------------ #
     def _get(self, path: str, params: dict[str, Any]) -> Any:
-        url = self.base_url + path
         last_exc: Optional[Exception] = None
-        for attempt in range(self.max_retries):
-            try:
-                resp = self.session.get(url, params=params, timeout=self.timeout)
-            except requests.RequestException as exc:
-                last_exc = exc
-            else:
-                if resp.status_code == 200:
-                    return resp.json()
-                # 429/418 限流、5xx 暫時性 → 退避重試；其餘直接報錯
-                if resp.status_code not in (429, 418) and resp.status_code < 500:
-                    raise BinanceError(
-                        f"HTTP {resp.status_code}：{resp.text[:200]}")
-                last_exc = BinanceError(f"HTTP {resp.status_code}")
-            # 2s, 4s, 8s...（Retry-After 若有則尊重）
-            time.sleep(2 ** attempt)
-        raise BinanceError(f"重試 {self.max_retries} 次仍失敗：{last_exc}")
+        for host in self._hosts():
+            url = host + path
+            for attempt in range(self.max_retries):
+                try:
+                    resp = self.session.get(url, params=params,
+                                            timeout=self.timeout)
+                except requests.RequestException as exc:
+                    last_exc = exc
+                else:
+                    if resp.status_code == 200:
+                        return resp.json()
+                    # 451/403 = 地區限制 → 別在本 host 重試，直接換下一個
+                    if resp.status_code in (451, 403):
+                        last_exc = BinanceError(
+                            f"HTTP {resp.status_code}（{host} 地區限制）")
+                        break
+                    # 其餘 4xx（400 錯誤參數等）是真錯 → 直接報，不換 host
+                    if resp.status_code not in (429, 418) and \
+                            resp.status_code < 500:
+                        raise BinanceError(
+                            f"HTTP {resp.status_code}：{resp.text[:200]}")
+                    # 429/418 限流、5xx 暫時性 → 退避重試同一 host
+                    last_exc = BinanceError(f"HTTP {resp.status_code}")
+                time.sleep(2 ** attempt)
+        raise BinanceError(
+            f"所有幣安端點都失敗（{last_exc}）。多半是地區限制——"
+            f"可用 --base 指定可用端點，或改用其他交易所資料源。")
 
     # ------------------------------------------------------------------ #
     # K 線

@@ -151,9 +151,69 @@ def test_retry_then_raise_on_persistent_5xx():
             assert False, "持續 5xx 應在重試耗盡後報錯"
         except BinanceError:
             pass
-        assert boom.n == 3, "應剛好重試 max_retries 次"
+        # 5xx 是暫時性 → 每個備援 host 都重試 max_retries 次才放棄
+        assert boom.n == 3 * len(client._hosts()), \
+            "應在每個 host 上各重試 max_retries 次"
     finally:
         bc.time.sleep = orig_sleep
+
+
+def test_geo_restriction_falls_back_to_next_host():
+    """451（地區限制）應跳過該 host、換下一個備援，而非整個失敗。"""
+    class _GeoSession:
+        def __init__(self):
+            self.hosts_tried = []
+
+        def get(self, url, params=None, timeout=None):
+            host = url.split("/api/")[0]
+            self.hosts_tried.append(host)
+            # 主端點（vision）回 451，其餘回正常資料
+            if "binance.vision" in host:
+                return _FakeResp({"code": 0, "msg": "restricted"}, status=451)
+            return _FakeResp([_row(1000)])
+
+    sess = _GeoSession()
+    client = BinanceClient(session=sess)
+    out = client.get_klines("BTC_USDT", "5M", limit=1)
+    assert out and out[0]["time"] == 1000, "換到可用備援後應正常回資料"
+    assert "binance.vision" in sess.hosts_tried[0], "先試預設 vision 端點"
+    assert len(sess.hosts_tried) >= 2, "451 後必須換下一個 host"
+
+
+def test_all_hosts_geo_blocked_raises_helpful_error():
+    class _AllBlocked:
+        def get(self, url, params=None, timeout=None):
+            return _FakeResp({"msg": "restricted"}, status=451)
+
+    import pionexbot.binance_client as bc
+    orig = bc.time.sleep
+    bc.time.sleep = lambda *_: None
+    try:
+        client = BinanceClient(session=_AllBlocked())
+        try:
+            client.get_klines("BTC_USDT", "5M")
+            assert False, "全部端點被擋應報錯"
+        except BinanceError as exc:
+            assert "地區限制" in str(exc) or "端點" in str(exc)
+    finally:
+        bc.time.sleep = orig
+
+
+def test_custom_base_url_is_tried_first():
+    class _Rec:
+        def __init__(self):
+            self.first = None
+
+        def get(self, url, params=None, timeout=None):
+            if self.first is None:
+                self.first = url
+            return _FakeResp([_row(1000)])
+
+    rec = _Rec()
+    BinanceClient(base_url="https://my.mirror.example",
+                  session=rec).get_klines("BTC_USDT", "5M", limit=1)
+    assert rec.first.startswith("https://my.mirror.example"), \
+        "--base 指定的端點必須最先試"
 
 
 def test_client_error_not_retried():
