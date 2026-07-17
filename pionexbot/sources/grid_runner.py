@@ -177,10 +177,16 @@ class GridRunner:
                 # 平倆失敗：保留狀態下一輪重試，絕不能弄丟持倆追蹤
                 self._order_fail(f"關閉網格平倆失敗（{total_qty:.8f} BTC）：{res.error}")
                 return
+            # 倒貨的損益也要進 realized_pnl——否則「歷次累計已實現」只算
+            # 收割的贏、藏掉重開的虧，帳面會系統性高估（2026-07 儀表稽核發現）
+            n = int(state.get("grids", self.grids))
+            step = (state["upper"] - state["lower"]) / n if n else 0
+            cost = sum(q * (state["lower"] + i * step) for i, q in held.items())
             self.store.record_trade(
                 symbol=self.symbol, side="SELL", base=res.filled_base,
                 quote=res.filled_quote, price=res.avg_price,
-                simulated=res.simulated, source="grid:close")
+                simulated=res.simulated, source="grid:close",
+                realized_pnl=res.filled_quote - cost)
         state["active"] = False
         state["held"] = {}
         self.store.save_grid_state(state)

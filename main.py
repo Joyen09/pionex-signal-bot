@@ -482,6 +482,120 @@ def cmd_grid_compare(bot: Bot, args) -> int:
     return 0
 
 
+def cmd_grid_report(bot: Bot, args) -> int:
+    """實盤網格績效儀表（路 1）：從 bot.db 重建真實現金流損益。
+
+    重要：資料庫的 realized_pnl 只記收割賣出、不含 grid:close 倒貨損益，
+    所以本報表用現金流重建（見 pionexbot/report.py 模組說明）。"""
+    import time as _time
+
+    from pionexbot.report import build_grid_report, format_grid_report
+
+    rows = [dict(r) for r in bot.store.trades_by_source("grid")]
+    if not rows:
+        print("trades 資料表裡沒有網格交易紀錄（確認在 ~/bot 目錄下跑）。")
+        return 1
+
+    g = bot.cfg.raw.get("grid", {})
+    capital = float(g.get("grids", 10)) * float(g.get("quote_per_grid", 5))
+    price_note = ""
+    try:
+        price = bot.client.get_ticker_price(bot.cfg.symbol)
+    except Exception:  # noqa: BLE001 - 離線時退回最後成交價
+        price = float(rows[-1]["price"])
+        price_note = "（離線：以最後成交價代替現價）"
+
+    d = build_grid_report(rows, grid_capital=capital,
+                          current_price=price, now_ts=_time.time())
+    print(format_grid_report(d, price_note))
+    return 0
+
+
+# 網格壓測（路 2）用與 binance-backtest 相同的三段市況
+def cmd_grid_stress(bot: Bot, args) -> int:
+    """網格長歷史壓力測試（路 2）：幣安 2024/2025/2026 三段市況，
+    測「你現在 config 的參數」是穩健還是剛好運氣好。
+
+    只讀資料、不碰實盤。--sweep 額外掃 atr_mult × adx_max 的小矩陣，
+    看參數排名跨市況穩不穩（目的是穩健性評估、不是找最優——判讀時
+    嚴禁挑某段最好的參數回頭改實盤，那是曲線擬合）。"""
+    from datetime import datetime, timezone
+
+    from pionexbot.binance_client import BinanceClient, BinanceError
+    from pionexbot.grid import DynamicGridBacktester, compare_grid_variants
+
+    cfg = bot.cfg
+    g = cfg.raw.get("grid", {})
+    symbol = (args.symbol or cfg.symbol).upper()
+    interval = args.interval or "15M"
+    grids = int(g.get("grids", 10))
+    qpg = float(g.get("quote_per_grid", 5))
+    capital = grids * qpg
+    cur_params = dict(
+        grids=grids, quote_per_grid=qpg, start_cash=capital,
+        use_atr=str(g.get("range_mode", "fixed")).lower() == "atr",
+        range_pct=float(g.get("range_pct", 0.15)),
+        atr_period=int(g.get("atr_period", 14)),
+        atr_mult=float(g.get("atr_mult", 6)),
+        use_regime=bool(g.get("regime_filter", False)),
+        adx_period=int(g.get("adx_period", 14)),
+        adx_max=float(g.get("adx_max", 30)),
+        use_reset=bool(g.get("reset_on_breakout", True)),
+        breakout_buffer=float(g.get("breakout_buffer", 0.02)),
+    )
+    base_url = args.base_url or cfg.raw.get("backtest", {}).get("binance_base_url")
+    client = BinanceClient(base_url=base_url)
+
+    def _to_ms(s: str) -> int:
+        return int(datetime.strptime(s, "%Y-%m-%d")
+                   .replace(tzinfo=timezone.utc).timestamp() * 1000)
+
+    if args.start or args.end:
+        end = args.end or _DEFAULT_SEGMENTS[-1][2]
+        segments = [(f"{args.start}~{end}", args.start, end)]
+    else:
+        segments = _DEFAULT_SEGMENTS
+
+    print(f"網格壓力測試 {symbol}（{interval}，資本 {capital:.0f} USDT = "
+          f"{grids} 格 × {qpg}）——用你現行 config 的參數對三段市況。\n")
+    for label, s, e in segments:
+        print(f"── {label}（{s} → {e}）抓取中 ...")
+        try:
+            kl = client.get_klines_range(symbol, interval, _to_ms(s), _to_ms(e))
+        except BinanceError as exc:
+            print(f"   ❌ 抓 K 線失敗：{exc}\n")
+            continue
+        if len(kl) < 500:
+            print(f"   ⚠ K 線太少（{len(kl)}），跳過\n")
+            continue
+        cur = DynamicGridBacktester(**cur_params).run(kl, symbol, label="現行設定")
+        refs = compare_grid_variants(kl, symbol, grids=grids, start_cash=capital)
+        bh = refs[0].buy_hold_return * 100
+        print(f"   {len(kl)} 根　買入持有 {bh:+.2f}%")
+        print("   策略              報酬      最大回撤  來回  重開  暫停%")
+        for r in [cur] + refs:
+            paused = r.paused_bars / r.bars * 100 if r.bars else 0
+            print(f"   {r.label:<14}{r.total_return*100:+8.2f}%  "
+                  f"{r.max_drawdown*100:6.1f}%  {r.completed:>4}  "
+                  f"{r.resets:>4}  {paused:4.0f}%")
+        if args.sweep:
+            print("   [sweep] atr_mult × adx_max（報酬% / 回撤%）：")
+            for am in (4.0, 6.0, 8.0):
+                cells = []
+                for ax in (20.0, 30.0, 999.0):
+                    p = {**cur_params, "use_atr": True, "atr_mult": am,
+                         "use_regime": ax < 999, "adx_max": ax}
+                    r = DynamicGridBacktester(**p).run(kl, symbol)
+                    cells.append(f"adx{'off' if ax >= 999 else int(ax)}:"
+                                 f"{r.total_return*100:+6.2f}/{r.max_drawdown*100:4.1f}")
+                print(f"     atr_mult {am:.0f}：" + "　".join(cells))
+        print()
+    print("判讀：① 現行設定要在三段市況都不輸「陽春固定」且回撤可控，才算穩健；"
+          "\n② sweep 看的是排名跨市況穩不穩，不是挑某段的最優參數回頭改實盤"
+          "（那是曲線擬合）；\n③ 網格贏 BTC 不稀奇（熊市），要看絕對報酬是否值得資金佔用。")
+    return 0
+
+
 def cmd_symbol_info(bot: Bot, args) -> int:
     symbol = (args.symbol or bot.cfg.symbol).upper()
     try:
@@ -772,6 +886,7 @@ def main(argv: list[str] | None = None) -> int:
                                  "buy", "sell",
                                  "backtest", "backtest-sweep", "optimize",
                                  "grid-backtest", "grid-compare",
+                                 "grid-report", "grid-stress",
                                  "dca-backtest", "symbol-info", "notify-test",
                                  "smc-plot", "smc-stats", "run-ict",
                                  "ict-backtest", "binance-backtest"])
@@ -792,6 +907,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--end", help="binance-backtest 自訂區間迄日 YYYY-MM-DD")
     parser.add_argument("--base-url", dest="base_url",
                         help="binance-backtest 覆寫端點（地區限制時用）")
+    parser.add_argument("--sweep", action="store_true",
+                        help="grid-stress 額外掃 atr_mult×adx_max 穩健性矩陣")
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -823,6 +940,10 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_grid_backtest(bot, args)
         if args.command == "grid-compare":
             return cmd_grid_compare(bot, args)
+        if args.command == "grid-report":
+            return cmd_grid_report(bot, args)
+        if args.command == "grid-stress":
+            return cmd_grid_stress(bot, args)
         if args.command == "dca-backtest":
             return cmd_dca_backtest(bot, args)
         if args.command == "symbol-info":
