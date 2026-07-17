@@ -523,6 +523,7 @@ def cmd_grid_stress(bot: Bot, args) -> int:
 
     from pionexbot.binance_client import BinanceClient, BinanceError
     from pionexbot.grid import DynamicGridBacktester, compare_grid_variants
+    from pionexbot.smc.mtf import interval_ms
 
     cfg = bot.cfg
     g = cfg.raw.get("grid", {})
@@ -542,6 +543,10 @@ def cmd_grid_stress(bot: Bot, args) -> int:
         adx_max=float(g.get("adx_max", 30)),
         use_reset=bool(g.get("reset_on_breakout", True)),
         breakout_buffer=float(g.get("breakout_buffer", 0.02)),
+        # 與 live 對齊：ATR/ADX 用 indicator_interval（預設 60M）算，
+        # 不是資料時框——否則 ATR 偏小、區間偏窄、重開被灌水
+        indicator_interval_ms=interval_ms(
+            str(g.get("indicator_interval", "60M"))),
     )
     base_url = args.base_url or cfg.raw.get("backtest", {}).get("binance_base_url")
     client = BinanceClient(base_url=base_url)
@@ -569,7 +574,9 @@ def cmd_grid_stress(bot: Bot, args) -> int:
             print(f"   ⚠ K 線太少（{len(kl)}），跳過\n")
             continue
         cur = DynamicGridBacktester(**cur_params).run(kl, symbol, label="現行設定")
-        refs = compare_grid_variants(kl, symbol, grids=grids, start_cash=capital)
+        refs = compare_grid_variants(
+            kl, symbol, grids=grids, start_cash=capital,
+            indicator_interval_ms=cur_params["indicator_interval_ms"])
         bh = refs[0].buy_hold_return * 100
         print(f"   {len(kl)} 根　買入持有 {bh:+.2f}%")
         print("   策略              報酬      最大回撤  來回  重開  暫停%")

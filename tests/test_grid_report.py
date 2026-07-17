@@ -143,6 +143,33 @@ def test_close_grid_records_realized_pnl():
         store.close()
 
 
+def test_indicator_series_uses_closed_higher_tf_buckets():
+    """儀器保真度：indicator_interval_ms 設 60M 時，ATR 要用聚合後的 60M K
+    計算，且每根 15M 資料 K 只能看到「上一個已收盤」的 60M 桶（防前視）。"""
+    from pionexbot.grid import DynamicGridBacktester, _ohlc
+
+    def k(t, h, low, c):
+        return {"time": t, "open": c, "high": h, "low": low, "close": c}
+
+    m15 = 900_000
+    # 兩個小時桶：第 1 小時 range=4（高10低6）、第 2 小時 range=8（高14低6）
+    ks = [k(0 * m15, 10, 8, 9), k(1 * m15, 9, 7, 8),
+          k(2 * m15, 8, 6, 7), k(3 * m15, 9, 7, 8),
+          k(4 * m15, 14, 10, 12), k(5 * m15, 13, 9, 11),
+          k(6 * m15, 12, 8, 10), k(7 * m15, 11, 6, 9)]
+    bt = DynamicGridBacktester(atr_period=1, adx_period=1,
+                               indicator_interval_ms=3_600_000)
+    atr, adx = bt._indicator_series(ks, [_ohlc(x) for x in ks])
+    # 第 1 小時內：還沒有已收盤的 60M 桶 → NaN
+    assert all(a != a for a in atr[:4]), "第一個桶內不得有指標值（防前視）"
+    # 第 2 小時內：用「第 1 小時」的 ATR = 10−6 = 4
+    assert all(abs(a - 4.0) < 1e-9 for a in atr[4:]), atr[4:]
+    # 不設 indicator_interval_ms → 逐根 15M 計算（舊行為，值不同）
+    atr15, _ = DynamicGridBacktester(atr_period=1, adx_period=1) \
+        ._indicator_series(ks, [_ohlc(x) for x in ks])
+    assert abs(atr15[5] - (13 - 9)) < 1e-9, "資料時框 ATR 應為單根 range"
+
+
 def test_grid_stress_wiring_offline():
     """grid-stress 端到端 wiring：假幣安客戶端 + fixture K 線，離線跑通。"""
     import json
