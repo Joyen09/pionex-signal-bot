@@ -200,7 +200,7 @@ def test_grid_stress_wiring_offline():
         bot = SimpleNamespace(cfg=cfg)
         args = SimpleNamespace(symbol=None, interval="15M",
                                start="2026-07-01", end="2026-07-14",
-                               base_url=None, sweep=True)
+                               base_url=None, sweep=True, atr_list="6,8")
         rc = m.cmd_grid_stress(bot, args)
         assert rc == 0
     finally:

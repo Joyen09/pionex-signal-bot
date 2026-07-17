@@ -586,8 +586,10 @@ def cmd_grid_stress(bot: Bot, args) -> int:
                   f"{r.max_drawdown*100:6.1f}%  {r.completed:>4}  "
                   f"{r.resets:>4}  {paused:4.0f}%")
         if args.sweep:
+            atr_values = tuple(float(x) for x in args.atr_list.split(",")) \
+                if getattr(args, "atr_list", None) else (4.0, 6.0, 8.0)
             print("   [sweep] atr_mult × adx_max（報酬% / 回撤%）：")
-            for am in (4.0, 6.0, 8.0):
+            for am in atr_values:
                 cells = []
                 for ax in (20.0, 30.0, 999.0):
                     p = {**cur_params, "use_atr": True, "atr_mult": am,
@@ -916,6 +918,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="binance-backtest 覆寫端點（地區限制時用）")
     parser.add_argument("--sweep", action="store_true",
                         help="grid-stress 額外掃 atr_mult×adx_max 穩健性矩陣")
+    parser.add_argument("--atr-list", dest="atr_list",
+                        help="grid-stress sweep 的 atr_mult 清單（如 6,7,8,10）")
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
