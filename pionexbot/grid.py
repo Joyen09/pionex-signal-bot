@@ -174,7 +174,8 @@ class DynamicGridBacktester:
                  use_atr: bool = True, range_pct: float = 0.05,
                  atr_period: int = 14, atr_mult: float = 6.0,
                  use_regime: bool = True, adx_period: int = 14, adx_max: float = 30.0,
-                 use_reset: bool = True, breakout_buffer: float = 0.02):
+                 use_reset: bool = True, breakout_buffer: float = 0.02,
+                 indicator_interval_ms: Optional[int] = None):
         self.grids = grids
         self.quote_per_grid = quote_per_grid
         self.fee_rate = fee_rate
@@ -188,22 +189,70 @@ class DynamicGridBacktester:
         self.adx_max = adx_max
         self.use_reset = use_reset
         self.breakout_buffer = breakout_buffer
+        # 指標時框（毫秒）：live GridRunner 用 indicator_interval（預設 60M）算
+        # ATR/ADX，而非資料時框。回測若直接在 15M 上算，ATR 偏小 → 區間偏窄 →
+        # 重開/手續費被灌水，對網格系統性偏悲觀。None = 沿用資料時框（舊行為）。
+        self.indicator_interval_ms = indicator_interval_ms
 
     def _levels(self, lower: float, upper: float) -> list[float]:
         step = (upper - lower) / self.grids
         return [lower + i * step for i in range(self.grids + 1)]
 
-    def run(self, klines: list[dict[str, Any]], symbol: str, label: str = "") -> DynGridResult:
+    def _indicator_series(self, klines, ohlc):
+        """回傳逐資料根的 (atr, adx) 兩個 list。
+
+        indicator_interval_ms 有給且 K 線帶時間戳時：先聚合成指標時框
+        （與 live 的 60M 一致），每根資料 K 只用「已收盤」的聚合 K 取值
+        （防前視）；否則直接在資料時框上算（舊行為）。"""
         import pandas as pd
         from .strategy import indicators
 
+        n = len(ohlc)
+        times = [k.get("time") if isinstance(k, dict) else
+                 (k[0] if isinstance(k, (list, tuple)) and k else None)
+                 for k in klines]
+        step = self.indicator_interval_ms
+        if not step or any(t is None for t in times):
+            highs = pd.Series([o[0] for o in ohlc])
+            lows = pd.Series([o[1] for o in ohlc])
+            closes = pd.Series([o[2] for o in ohlc])
+            atr_s = indicators.atr(highs, lows, closes, self.atr_period)
+            adx_s = indicators.adx(highs, lows, closes, self.adx_period)
+            return list(atr_s), list(adx_s)
+
+        # 聚合到指標時框（依 time // step 分桶，桶內取 高=max/低=min/收=末）
+        buckets: list[list[float]] = []      # [h, l, c]
+        bucket_ids: list[int] = []
+        bar_bucket_pos: list[int] = []       # 每根資料 K 落在第幾個桶
+        for t, (h, low, c) in zip(times, ohlc):
+            b = int(float(t)) // int(step)
+            if not bucket_ids or b != bucket_ids[-1]:
+                bucket_ids.append(b)
+                buckets.append([h, low, c])
+            else:
+                buckets[-1][0] = max(buckets[-1][0], h)
+                buckets[-1][1] = min(buckets[-1][1], low)
+                buckets[-1][2] = c
+            bar_bucket_pos.append(len(buckets) - 1)
+        bh = pd.Series([b[0] for b in buckets])
+        bl = pd.Series([b[1] for b in buckets])
+        bc = pd.Series([b[2] for b in buckets])
+        atr_b = list(indicators.atr(bh, bl, bc, self.atr_period))
+        adx_b = list(indicators.adx(bh, bl, bc, self.adx_period))
+        nan = float("nan")
+        # 只用「上一個已收盤」的桶（目前所在桶還沒收完）
+        atr = [atr_b[p - 1] if p >= 1 else nan for p in bar_bucket_pos]
+        adx = [adx_b[p - 1] if p >= 1 else nan for p in bar_bucket_pos]
+        return atr, adx
+
+    def run(self, klines: list[dict[str, Any]], symbol: str, label: str = "") -> DynGridResult:
         ohlc = [_ohlc(k) for k in klines]
         n = len(ohlc)
-        highs = pd.Series([o[0] for o in ohlc])
-        lows = pd.Series([o[1] for o in ohlc])
+        atr_list, adx_list = self._indicator_series(klines, ohlc)
+        import pandas as pd
         closes = pd.Series([o[2] for o in ohlc])
-        atr_s = indicators.atr(highs, lows, closes, self.atr_period)
-        adx_s = indicators.adx(highs, lows, closes, self.adx_period)
+        atr_s = pd.Series(atr_list)
+        adx_s = pd.Series(adx_list)
 
         cash = self.start_cash
         active = False

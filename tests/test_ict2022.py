@@ -117,18 +117,20 @@ def test_find_setup_respects_killzone_filter():
                       killzone=None) is None, "時段外不掛新單"
 
 
-def test_require_ote_hard_condition_picks_ote_zone():
+def test_require_ote_hard_condition_blocks_non_ote():
     """require_ote=true：CE 不在 OTE 帶的區域直接淘汰。
-    劇本中 BPR（CE=99.75）在 OTE 帶外、FVG（CE=99.2）在帶內——
-    預設選優先權高的 BPR，開硬條件後應改選 FVG。"""
-    smc_cfg = {"swing": {"left": 1, "right": 1}, "fvg": {"min_size_pct": 0.0001}}
+    把 OTE 帶調窄（0.74–0.79）讓劇本 FVG（CE=99.2）落帶外——
+    預設照常成立（in_ote=False），開硬條件後應整個擋下。"""
+    smc_cfg = {"swing": {"left": 1, "right": 1}, "fvg": {"min_size_pct": 0.0001},
+               "fib": {"ote": (0.74, 0.79)}}
     base = {"min_rr_tp1": 0.5, "killzone_filter": False}
     s0 = find_setup(_uptrend_htf(), _setup_trigger(), base, smc_cfg)
-    assert s0.tags["zone_kind"] == "BPR" and not s0.tags["in_ote"]
-    s1 = find_setup(_uptrend_htf(), _setup_trigger(),
-                    {**base, "require_ote": True}, smc_cfg)
-    assert s1 is not None and s1.tags["zone_kind"] == "FVG"
-    assert s1.tags["in_ote"] and abs(s1.limit_price - 99.2) < 1e-9
+    assert s0 is not None and not s0.tags["in_ote"]
+    funnel = {}
+    assert find_setup(_uptrend_htf(), _setup_trigger(),
+                      {**base, "require_ote": True}, smc_cfg,
+                      funnel=funnel) is None
+    assert funnel.get("OTE 外") == 1
 
 
 def test_sweep_sources_filters_pool_kind():
@@ -194,14 +196,18 @@ def test_klines_sorted_ascending_regardless_of_api_order():
 
 
 def test_backtest_e2e_fill_and_take_profit():
-    """端到端：劇本延伸出回踩觸價 → 拉升打 TP，驗證成交與 R 記帳。
-    entry 與 trigger 用同一序列（15M），HTF 給已收盤的上升 4H。"""
+    """端到端：劇本回踩觸價成交 → TP1 落袋 → 保本被回踩打回，驗證 R 記帳。
+    entry 與 trigger 用同一序列（15M），HTF 給已收盤的上升 4H。
+
+    註：觸價成交模型（backtestfillfix.md）下，TP1 後止損上移保本，隨後的
+    回踩觸及保本價即以保本價出場（小正報酬）——這比舊收盤模型「讓部位撐過
+    保本觸及、續抱到更高 TP」更貼近實盤。故出場為保本 sl、R 為小正。"""
     seq = _setup_trigger()
     base_t = len(seq)
     seq = [dict(k, time=k["time"] * 900_000) for k in seq]
     ext = [
-        bar(101.8, 101.9, 99.15, 99.6, base_t * 900_000),        # 回踩觸價 99.2
-        bar(99.6, 103.2, 99.5, 102.8, (base_t + 1) * 900_000),   # 拉升掃 TP（103 池）
+        bar(101.8, 101.9, 99.15, 99.6, base_t * 900_000),        # 回踩觸保本
+        bar(99.6, 103.2, 99.5, 102.8, (base_t + 1) * 900_000),
     ]
     entry = seq + ext
     htf = [dict(k, time=(i - 30) * 14_400_000)
@@ -217,12 +223,15 @@ def test_backtest_e2e_fill_and_take_profit():
     closed = [t for t in rep.trades if t.closed]
     assert len(closed) == 1, f"應有一筆成交並出場，實際 {len(closed)}"
     t = closed[0]
-    assert t.exit_reason == "tp_all", f"應以 TP 全出，實際 {t.exit_reason}"
-    # 優先權 BPR > FVG：下跌段的看跌 FVG 與反攻的看漲 FVG 疊出 BPR（CE=99.75），
-    # 策略應選 BPR 而非單獨的 FVG（CE=99.2）
-    assert t.tags["zone_kind"] == "BPR", f"應選 BPR，實際 {t.tags['zone_kind']}"
-    assert abs(t.entry - 99.75) < 1e-6, "應以 BPR 的 CE 成交"
-    assert 1.2 < t.r < 2.0, f"R 應約 1.5（102.5/103 分批出、扣手續費），實際 {t.r:.2f}"
+    # v1.1 生命週期：MSS 腿疊出的 BPR（CE=99.75）在拉升段被收穿即死，
+    # 策略正確改選 FVG（CE=99.2）
+    assert t.tags["zone_kind"] == "FVG", f"應選 FVG，實際 {t.tags['zone_kind']}"
+    assert abs(t.entry - 99.2) < 1e-6, "應以 FVG 的 CE 成交"
+    assert t.tags["candidates"] <= 3, "候選區域數應為個位數（v1.1 儀器指標）"
+    # TP1 落袋 + 餘倉保本出場 → 小正報酬；成交在保本價（觸價、滑移 0）
+    assert t.exit_reason == "sl", f"保本被回踩觸價 → sl，實際 {t.exit_reason}"
+    assert abs(t.sl_slip_r) < 1e-9, "觸價成交滑移應為 0"
+    assert 0.5 < t.r < 2.0, f"TP1 落袋 + 保本 → 小正，實際 {t.r:.2f}"
 
 
 def test_backtest_runs_and_reports():

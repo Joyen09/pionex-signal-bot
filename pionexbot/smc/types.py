@@ -71,6 +71,10 @@ class StructureEvent:
     swing_ref: SwingPoint      # 被突破的 swing
     confirmed_at: int          # 突破「收盤確認」的那根 K
     time: Optional[Any] = None
+    # 位移品質（v1.1）：突破是否伴隨足夠位移（ATR 實體 / 推進段含合格 FVG）。
+    # 趨勢狀態機不看這個欄位（弱勢突破也要讓狀態翻面）；
+    # 下游（OB/PB 生成、ict2022 等 MSS、密度統計）只認 True 的事件。
+    displacement: bool = True
 
 
 @dataclass
@@ -102,6 +106,10 @@ class Zone:
     state: ZoneState = ZoneState.FRESH
     state_changed_at: Optional[int] = None
     time: Optional[Any] = None
+    # 生命週期（v1.1）：翻轉後再次收盤穿越 / 走完 / 逾齡 / 同類超額 → 移除。
+    # None = 目前仍活躍。移除後不再是策略候選、plot 也不畫（單一真相來源）。
+    removed_at: Optional[int] = None
+    flips: int = 0             # 已翻轉次數（FVG→IFVG / OB→Breaker 最多一次）
 
     @property
     def ce(self) -> float:
@@ -110,3 +118,8 @@ class Zone:
 
     def contains(self, price: float) -> bool:
         return self.bottom <= price <= self.top
+
+    def is_active(self, index: int) -> bool:
+        """在第 index 根 K 當下是否活躍（已生成且未被移除）。"""
+        return self.created_at <= index and \
+            (self.removed_at is None or index < self.removed_at)

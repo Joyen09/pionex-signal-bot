@@ -94,6 +94,13 @@ class Store:
             "SELECT * FROM trades ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
 
+    def trades_by_source(self, prefix: str) -> list[sqlite3.Row]:
+        """依 source 前綴撈全部交易（升冪），供績效儀表重建現金流。"""
+        return self.conn.execute(
+            "SELECT * FROM trades WHERE source LIKE ? ORDER BY ts, id",
+            (prefix + "%",)
+        ).fetchall()
+
     def set_meta(self, key: str, value) -> None:
         self._set(key, str(value))
 
