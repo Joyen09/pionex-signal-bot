@@ -143,7 +143,7 @@ class DcaRunner:
         self.store.save_dca_state(st)
         self.store.record_trade(symbol=self.symbol, side="BUY", base=res.filled_base,
                                 quote=res.filled_quote, price=res.avg_price,
-                                simulated=res.simulated, source="dca")
+                                simulated=res.simulated, source="dca", fee=res.fee, fee_coin=res.fee_coin)
         tag = f"（逢低 {mult:.1f}×）" if mult > 1 else ""
         self.notifier.send(
             f"🟣 DCA 買入 {res.filled_quote:.2f} USDT{tag} @ {res.avg_price:.2f}",
@@ -187,7 +187,7 @@ class DcaRunner:
         self.store.record_trade(symbol=self.symbol, side="SELL", base=res.filled_base,
                                 quote=res.filled_quote, price=res.avg_price,
                                 simulated=res.simulated, source="dca:tp",
-                                realized_pnl=realized)
+                                realized_pnl=realized, fee=res.fee, fee_coin=res.fee_coin)
         again = "，重新開始定投" if self.tp_fraction >= 1.0 else "，剩餘續抱"
         self.notifier.send(
             f"🎯 DCA 停利 +{ret*100:.1f}%！賣出 {res.filled_quote:.2f} USDT"

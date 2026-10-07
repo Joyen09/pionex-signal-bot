@@ -115,6 +115,7 @@ def test_close_grid_records_realized_pnl():
     class FakeRes:
         ok, simulated, error = True, False, ""
         filled_base, filled_quote, avg_price = 20.0, 140.0, 7.0
+        fee, fee_coin = None, ""      # 對齊 OrderResult 契約（交易所未回報手續費）
 
     class FakeBroker:
         def market_sell(self, symbol, qty):

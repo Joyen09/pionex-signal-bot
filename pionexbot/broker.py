@@ -110,6 +110,28 @@ class LiveBroker(Broker):
                     break
         return fb, fq
 
+    @staticmethod
+    def _extract_fee(d: dict) -> tuple[Optional[float], str]:
+        """抓交易所回報的手續費與幣別。欄位名各家不同，找不到回 (None, "")。
+
+        回 None 而非 0：未記錄與免手續費必須可以分辨，否則成本分析會偏樂觀。"""
+        for key in ("fee", "fees", "commission", "tradeFee", "filledFee"):
+            v = d.get(key)
+            if v in (None, ""):
+                continue
+            try:
+                f = abs(float(v))
+            except (TypeError, ValueError):
+                continue
+            coin = ""
+            for ck in ("feeCoin", "feeCurrency", "commissionAsset",
+                       "feeAsset", "feeToken"):
+                if d.get(ck):
+                    coin = str(d[ck])
+                    break
+            return f, coin
+        return None, ""
+
     def _parse_fill(self, resp: dict, side: Side, symbol: str) -> OrderResult:
         data = resp.get("data", {}) or {}
         order_id = str(data.get("orderId", data.get("id", "")))
@@ -157,10 +179,12 @@ class LiveBroker(Broker):
                 pass
 
         avg = filled_quote / filled_base if filled_base else 0.0
+        fee, fee_coin = self._extract_fee(data)
         return OrderResult(
             ok=True, side=side, symbol=symbol, simulated=False,
             filled_base=filled_base, filled_quote=filled_quote,
-            avg_price=avg, order_id=order_id, raw=data,
+            avg_price=avg, order_id=order_id,
+            fee=fee, fee_coin=fee_coin, raw=data,
         )
 
     def market_buy(self, symbol: str, quote_amount: float) -> OrderResult:

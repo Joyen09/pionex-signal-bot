@@ -150,6 +150,7 @@ class Executor:
             base=result.filled_base, quote=result.filled_quote,
             price=result.avg_price, simulated=result.simulated,
             source=signal.source, order_id=result.order_id, realized_pnl=realized,
+            fee=result.fee, fee_coin=result.fee_coin,
         )
 
     # ------------------------------------------------------------------ #

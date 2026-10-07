@@ -81,6 +81,10 @@ class OrderResult:
     order_id: str = ""
     simulated: bool = False      # 是否為紙上模擬
     error: str = ""
+    # 交易所回報的實際手續費與計費幣別（抓不到時為 None，不要用 0 填充——
+    # 0 會被誤讀成免手續費，讓後續分析偏樂觀）
+    fee: Optional[float] = None
+    fee_coin: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
 
     def __str__(self) -> str:

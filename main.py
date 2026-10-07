@@ -482,6 +482,52 @@ def cmd_grid_compare(bot: Bot, args) -> int:
     return 0
 
 
+def cmd_export_trades(bot: Bot, args) -> int:
+    """匯出逐筆原始成交 + 網格參數 + 未平倉持倉（給外部分析）。
+
+    刻意不做配對/聚合——配對方法由分析者決定。手續費未記錄的誠實說明
+    寫在輸出的 README.txt（見 pionexbot/export.py 模組說明）。"""
+    from pionexbot.export import write_export
+
+    out_dir = args.out or "data/export"
+    sim = None
+    if args.symbol and args.symbol.lower() == "all":
+        symbol = ""
+    else:
+        symbol = (args.symbol or bot.cfg.symbol).upper()
+    if not args.include_paper:
+        sim = bot.cfg.is_live is False   # 只匯出與目前模式相符的紀錄
+
+    rows = [dict(r) for r in bot.store.all_trades(symbol=symbol, simulated=sim)]
+    if not rows:
+        print(f"找不到成交紀錄（symbol={symbol or 'ALL'}、"
+              f"{'含紙上' if args.include_paper else '僅' + bot.cfg.mode}）。"
+              "確認是在 ~/bot（實盤）目錄下執行。")
+        return 1
+
+    try:
+        price = bot.client.get_ticker_price(bot.cfg.symbol)
+    except Exception:  # noqa: BLE001 - 離線時退回最後成交價
+        price = float(rows[-1]["price"])
+        print("（離線：以最後成交價代替現價）")
+
+    info = write_export(out_dir, rows=rows, cfg=bot.cfg,
+                        grid_state=bot.store.load_grid_state(),
+                        current_price=price,
+                        fee_recorded_since=bot.store.get_meta("fee_since", "") or "")
+    pos = info["positions"]
+    print(f"✅ 已匯出 {info['trades']} 筆成交 → {info['dir']}/")
+    print(f"   期間：{info['span']}")
+    print(f"   檔案：trades.csv、grid_meta.csv、open_positions.csv、README.txt")
+    print(f"\n目前未平倉：{pos['total_base']:.8f}　均價 {pos['avg_cost']:.2f}"
+          f"　未實現 {pos['unrealized']:+.2f}")
+    missing = sum(1 for r in rows if not r.get("fee"))
+    if missing:
+        print(f"\n⚠ {missing}/{len(rows)} 筆沒有手續費記錄（程式早期未記錄）。")
+        print("   請另從派網 App →『交易記錄』匯出 CSV 補上，用 order_id 對照。")
+    return 0
+
+
 def cmd_grid_report(bot: Bot, args) -> int:
     """實盤網格績效儀表（路 1）：從 bot.db 重建真實現金流損益。
 
@@ -881,8 +927,11 @@ def main(argv: list[str] | None = None) -> int:
                                  "grid-report", "grid-stress",
                                  "dca-backtest", "symbol-info", "notify-test",
                                  "smc-plot", "smc-stats", "run-ict",
-                                 "ict-backtest", "binance-backtest"])
+                                 "ict-backtest", "binance-backtest",
+                                 "export-trades"])
     parser.add_argument("--config", default="config.yaml")
+    parser.add_argument("--include-paper", action="store_true",
+                        help="匯出時一併包含紙上模擬紀錄")
     parser.add_argument("--quote", type=float, help="買入金額（報價幣）")
     parser.add_argument("--base", type=float, help="賣出數量（基礎幣）")
     parser.add_argument("--strategy", help="回測指定策略")
@@ -932,6 +981,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_grid_backtest(bot, args)
         if args.command == "grid-compare":
             return cmd_grid_compare(bot, args)
+        if args.command == "export-trades":
+            return cmd_export_trades(bot, args)
         if args.command == "grid-report":
             return cmd_grid_report(bot, args)
         if args.command == "grid-stress":
