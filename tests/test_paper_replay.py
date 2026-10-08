@@ -141,6 +141,21 @@ def test_grid_meta_tolerates_old_state_without_created_ts():
     assert m["range_pct"] == "", "沒設定就留空，不要填假的預設值"
 
 
+def test_counts_are_separated_by_kind():
+    """次數比對是主要判準，三種動作不能混在一起算。"""
+    import tempfile as tf
+    with tf.TemporaryDirectory() as d:
+        r = _real(os.path.join(d, "t.csv"), [
+            (T0, "BUY", 100.0, "grid"),
+            (T0 + 60, "SELL", 101.0, "grid"),
+            (T0 + 120, "SELL", 90.0, "grid:close"),
+        ])
+        _, s = match(r, _ev([(T0, "BUY", 100.0)]), tol_min=5)
+        assert s["counts"]["BUY"] == {"實際": 1, "模擬": 1}
+        assert s["counts"]["SELL"] == {"實際": 1, "模擬": 0}
+        assert s["counts"]["DUMP"] == {"實際": 1, "模擬": 0}
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

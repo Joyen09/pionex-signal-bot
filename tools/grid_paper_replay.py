@@ -272,6 +272,8 @@ def main() -> int:
     ap.add_argument("--slip", type=float, default=0.0001)
     ap.add_argument("--tol-min", type=int, default=5,
                     help="配對容忍幾分鐘（預設 5；紙上輪詢 20 秒，但資料是 1 分鐘線）")
+    ap.add_argument("--jitter", default="-60,-30,-10,-5,5,10,30,60",
+                    help="起點偏移幾分鐘（逗號分隔）以估模擬自身的變動帶；空字串關閉")
     ap.add_argument("--grid-meta", help="export-trades 產生的 grid_meta.csv（用來取開網格時間）")
     ap.add_argument("--from", dest="t_from", help="起（UTC）。不給就依序找 grid_meta、第一筆成交")
     ap.add_argument("--to", dest="t_to", help="迄（UTC，預設取 trades.csv 最後一筆）")
@@ -330,6 +332,27 @@ def main() -> int:
     cmp_df, summ = match(real, ev, args.tol_min)
     cmp_df.to_csv(os.path.join(args.out, "compare.csv"), index=False, encoding="utf-8-sig")
 
+    # ---- 起點微調帶：網格是路徑相依的系統 ----
+    # 網格的每條線都錨在「開網格當下的價格」。交易所之間本來就有價差（實測派網
+    # vs Bitstamp 約 0.087%，約網格間距的 7%），錨點一偏，之後每一次穿越的時間
+    # 都會跟著偏，而且每次重開網格都重新錨一次，偏差會累積。
+    # 所以「逐筆時間能不能對上」不是有意義的檢定；有意義的是：
+    #   把起點前後挪一點，模擬自己會跑出多寬的次數帶？實際值有沒有落在帶內？
+    band = {}
+    offs = [int(x) for x in args.jitter.split(",") if x.strip()] if args.jitter else []
+    for off in offs:
+        a, b = i + off, j + off
+        if a < 0 or b > len(data["px"]):
+            continue
+        e2, s2 = replay(data["px"][a:b], st.ts[a:b], args.grids, args.quote_per_grid,
+                        args.rp, args.buf, args.fee, args.slip, mode=0, cooldown=0,
+                        max_loss=0.0, use_atr=False, atr=data["atr"][a:b],
+                        atr_mult=0.0, adx=data["adx"][a:b], adx_max=1000.0,
+                        cash0=cash0)
+        for k in ("BUY", "SELL", "DUMP"):
+            band.setdefault(k, []).append(sum(1 for e in e2 if e["kind"] == k))
+        band.setdefault("PNL", []).append(float(s2[0]))
+
     c = summ["counts"]
     opens = sum(1 for e in ev if e["kind"] == "OPEN")
     lines = [
@@ -341,12 +364,29 @@ def main() -> int:
         f"- 配對容忍：{args.tol_min} 分鐘",
         f"- 起點來源：{origin}", "",
         "## 次數比對（這才是重點）", "",
-        "| 動作 | 實際 | 模擬 | 差 |", "|---|---|---|---|",
     ]
     label = {"BUY": "買進", "SELL": "收割賣出", "DUMP": "跌破倒貨"}
-    for k in ("BUY", "SELL", "DUMP"):
-        lines.append(f"| {label[k]} | {c[k]['實際']} | {c[k]['模擬']} | "
-                     f"{c[k]['模擬'] - c[k]['實際']:+d} |")
+    inside: list[bool] = []
+    if band:
+        lines += [f"模擬變動帶 = 起點前後挪 {args.jitter} 分鐘各跑一次的範圍。",
+                  "網格的線錨在開網格當下的價格，錨點一偏之後全部跟著偏，所以要看的是",
+                  "「實際值有沒有落在模擬自己的帶內」，不是「有沒有剛好相等」。", "",
+                  "| 動作 | 實際 | 模擬 | 模擬變動帶 | 實際在帶內？ |",
+                  "|---|---|---|---|---|"]
+        for k in ("BUY", "SELL", "DUMP"):
+            lo, hi = min(band[k]), max(band[k])
+            ok = lo <= c[k]["實際"] <= hi
+            inside.append(ok)
+            lines.append(f"| {label[k]} | {c[k]['實際']} | {c[k]['模擬']} | "
+                         f"{lo}~{hi} | {'✅' if ok else '❌'} |")
+        p = band["PNL"]
+        lines += ["", f"模擬淨損益帶：{min(p):+.2f} ~ {max(p):+.2f} USDT"
+                      f"（本次起點 {stats[0]:+.2f}）"]
+    else:
+        lines += ["| 動作 | 實際 | 模擬 | 差 |", "|---|---|---|---|"]
+        for k in ("BUY", "SELL", "DUMP"):
+            lines.append(f"| {label[k]} | {c[k]['實際']} | {c[k]['模擬']} | "
+                         f"{c[k]['模擬'] - c[k]['實際']:+d} |")
     # 配對率只拿「實際筆數」當分母會失真：模擬多做的那些不會被扣分。
     # 以聯集當分母（兩邊沒配到的都算沒對上），這個數字才不會自己看起來很好。
     m, rt, stt = summ["matched"], summ["real_total"], summ["sim_total"]
@@ -366,11 +406,16 @@ def main() -> int:
               f"、模擬沒配到的 {stt - m} 筆都算沒對上）",
               f"- 明細見 `{args.out}/compare.csv`、模擬事件全集見 `{args.out}/sim_events.csv`", "",
               "## 判讀", "",
-              "- 看「次數」和「配對率」，不要看損益差幾塊。滑價、成交價、交易所行情與",
-              "  Bitstamp 的價差都會讓損益不同，那不代表行為不吻合。",
-              "- 次數差一兩次通常是邊界時機（價格剛好踩在線上、或輪詢晚了幾秒），可接受。",
-              "- 次數差一倍、或倒貨次數對不上，就是行為不吻合：**回測的結論不能往實盤推**，",
-              "  要先找出差在哪裡，不要改參數讓它看起來吻合。"]
+              "**以「次數有沒有落在模擬變動帶內」為準。**",
+              "逐筆配對率天生就低，不要拿它當及格標準——網格是路徑相依的：交易所價差",
+              "（實測派網 vs Bitstamp 約 0.087%，約網格間距的 7%）會讓每次開網格的錨點",
+              "偏移，之後每一次穿越的時間都跟著偏，重開幾次就累積成好幾小時。",
+              "逐筆明細的用途是找「整段缺一塊」這種結構性問題，不是算分數。", "",
+              "- 三種動作都落在帶內 → 總量行為吻合，回測的**統計性結論**（交易頻率、",
+              "  收割/倒貨比例、年度損益比較）可以採信。",
+              "- 任何一種落在帶外，特別是**倒貨次數** → 行為不吻合，**回測結論不能往實盤推**。",
+              "  要先找出差在哪裡，不要改參數讓它看起來吻合。",
+              "- 不論結果如何，回測都**不能**拿來預測個別交易會在何時發生。"]
     txt = "\n".join(lines) + "\n"
     with open(os.path.join(args.out, "replay_report.md"), "w", encoding="utf-8") as fh:
         fh.write(txt)
