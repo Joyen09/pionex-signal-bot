@@ -220,6 +220,18 @@ tail -f stress.log
 若照範本抄，改 `range_pct` 會完全沒作用，整個實測白做。務必確認紙上 config 是
 `range_mode: fixed`、`regime_filter: false`。
 
+⚠ **紙上的每一道 docker 指令都要帶 `-f docker-compose.paper.yml`。**
+`~/bot-paper` 是同一個 repo 的第二份 clone，裡面也有 `docker-compose.yml`；
+少打 `-f` 就會用到正式那份，`container_name` 直接撞上**實盤**的 `pionex-grid`。
+2026-10-08 實際撞過一次，Docker 報 "name is already in use" 中止——**那是保護**。
+**絕對不要 `docker rm` 那個容器，它是真錢的機器人。**
+嫌麻煩可在 `~/bot-paper/.env` 加 `COMPOSE_FILE=docker-compose.paper.yml` 設定一次。
+
+⚠ 同日發現 `docker-compose.paper.yml` **原本根本沒有 grid 服務**（只有 webhook
+與 strategy），紙上網格無從啟動。已補上 `pionex-paper-grid`，並加
+`tests/test_compose_isolation.py` 鎖住「服務要齊、容器名不撞、image 不撞、
+對外埠不撞」。
+
 ⚠ `~/bot-paper/config.yaml` 在 2026-10-08 實測是**範本原封不動的那份**
 （`range_mode: atr`、`regime_filter: true`、`grids: 10`、`quote_per_grid: 5`），
 不是實盤設定的複本。要改的是四個值，不是一個；`range_pct` 反而已經是 0.15。

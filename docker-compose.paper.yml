@@ -1,8 +1,18 @@
 # 紙上測試專用 Compose —— 與正式部署完全隔離，可同一台機器平行跑。
 #
+# ⚠️ 每一道指令都要帶 -f docker-compose.paper.yml。
+#    ~/bot-paper 是同一個 repo 的第二份 clone，裡面也有 docker-compose.yml，
+#    少打 -f 就會用到那份正式設定，container_name 直接撞上**實盤**的
+#    pionex-grid。撞到時 Docker 會報 "name is already in use" 並中止——
+#    那是保護，不是故障。**絕對不要去 docker rm 那個容器，它是真錢的機器人。**
+#
 # 用法（建議 clone 第二份 repo 到 ~/bot-paper 再用這份）：
 #   docker compose -f docker-compose.paper.yml up -d --build
 #   docker compose -f docker-compose.paper.yml logs -f
+#   docker compose -f docker-compose.paper.yml run --rm grid export-trades --out /app/data/x
+#
+# 嫌每次都要打 -f 很煩，可以在 ~/bot-paper 設一次：
+#   echo 'COMPOSE_FILE=docker-compose.paper.yml' >> .env
 #
 # 隔離重點：
 #   - image / container 名稱都加 -paper，不會覆蓋或撞到正式的 pionex-grid
@@ -10,6 +20,20 @@
 #   - data/ logs/ 跟著本目錄走，與正式的資料庫互不相干
 
 services:
+  # 網格機器人（紙上）。正式那份叫 pionex-grid，這份叫 pionex-paper-grid。
+  grid:
+    build: .
+    image: pionex-signal-bot-paper
+    container_name: pionex-paper-grid
+    restart: unless-stopped
+    env_file: .env
+    command: ["run-grid"]
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data
+      - ./logs:/app/logs
+
+
   webhook:
     build: .
     image: pionex-signal-bot-paper
