@@ -352,7 +352,14 @@ def main() -> int:
     m, rt, stt = summ["matched"], summ["real_total"], summ["sim_total"]
     union = rt + stt - m
     rate = m / union if union else 0.0
-    lines += ["", f"模擬另外開了 {opens} 次網格（實際的開網格不會寫進 trades 表，無從比對）。", "",
+    skips = sum(1 for e in ev if e["kind"] == "SKIP")
+    lines += ["", f"模擬另外開了 {opens} 次網格（實際的開網格不會寫進 trades 表，無從比對）。"]
+    if skips:
+        lines += ["",
+                  f"⚠ 模擬因現金不足跳過了 {skips} 次買單（起始現金 {cash0:.0f} USDT）。",
+                  "  紙上環境不記現金、也不查餘額，所以**紙上不會有這種跳過**——",
+                  "  這個差異是預期的，不算行為不吻合。若次數對不上，先扣掉這些再看。"]
+    lines += ["",
               "## 逐筆配對", "",
               f"- 實際成交 {rt} 筆，模擬動作 {stt} 筆，配對成功 {m} 筆",
               f"- **吻合度 {rate:.0%}**（分母是聯集 {union}：實際沒配到的 {rt - m} 筆"
