@@ -136,9 +136,13 @@ class GridRunner:
 
     def _new_grid(self, price: float) -> dict:
         lower, upper = self._grid_bounds(price)
+        # created_ts：這組網格是什麼時候開的。匯出時要靠它才能對齊回測重播的
+        # 起點——用「第一筆成交時間」當起點會少掉開網格到第一次成交之間那段，
+        # 比對買賣點時會系統性地差一個循環。
         state = {"active": True, "lower": lower, "upper": upper,
                  "grids": self.grids, "held": {}, "realized": 0.0,
-                 "created_price": price, "last_price": price}
+                 "created_price": price, "created_ts": time.time(),
+                 "last_price": price}
         self.store.save_grid_state(state)
         self.notifier.send(
             f"🔲 開新網格：{lower:.2f}~{upper:.2f}（{self.grids} 格 / 每格 "

@@ -111,6 +111,11 @@ def grid_meta(cfg, grid_state: Optional[dict],
         "quote_per_grid": per,
         "allocated_capital": grids * per,
         "range_mode": g.get("range_mode", "fixed"),
+        # range_pct 是「區間多寬」這個問題的答案，分析時一定要知道；
+        # 只有 range_mode=fixed 時它才真的生效，所以兩個都匯出。
+        "range_pct": g.get("range_pct", ""),
+        "auto_range": g.get("auto_range", ""),
+        "max_loss_quote": g.get("max_loss_quote", ""),
         "atr_mult": g.get("atr_mult", ""),
         "regime_filter": g.get("regime_filter", ""),
         "adx_max": g.get("adx_max", ""),
@@ -125,6 +130,11 @@ def grid_meta(cfg, grid_state: Optional[dict],
             "current_grid_created_price": grid_state.get("created_price", ""),
             "current_grid_active": 1,
         })
+        # 開網格時間：回測重播要用它當起點。舊的狀態檔沒有這個欄位，留空。
+        if grid_state.get("created_ts"):
+            utc, tpe = _fmt_time(float(grid_state["created_ts"]))
+            meta["current_grid_created_utc"] = utc
+            meta["current_grid_created_taipei"] = tpe
     else:
         meta["current_grid_active"] = 0
     if first_trade_ts:

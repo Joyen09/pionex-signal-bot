@@ -200,6 +200,46 @@ tail -f stress.log
 3. 使用者還想做的其他機器人：台股、每日便宜機票搜尋、OCR 圖片辨識（都想用同一隻 Discord bot 架構）
 4. 網格照顧：跌破 60369 會自動平倉重開（設計行為）；BTC 現處 2026 熊市，使用者知道 4 年週期論
 
+## 7b. 網格區間寬度：已驗收，紙上實測進行中（2026-10-08）
+
+結論見 `docs/grid_range_study_report.md`。摘要：
+
+- **±5%（實盤現行）九年合計 -118.7**，費率 0.05%~0.2% 任一值下都沒有正過。
+- ±10%~±15% 一致較佳，但彼此差異在雜訊範圍內，**不可以從表裡挑最高的那個**。
+- 採用 **±15%**，理由與績效無關：`config.example.yaml` 的預設值本來就是 0.15，
+  用既有預設可避開「看過結果再挑最好的」。
+- 實盤那 97 天的 +10.7 排在 ±5% 分布的 **第 84 百分位**——是運氣好的一段，不是常態。
+- 對照組買進持有 +565.0 遠勝所有網格變體。這份回測只說明「要跑網格別用 ±5%」，
+  **沒有證明網格值得跑**。
+
+紙上實測（4~8 週）：`~/bot-paper` 只改 `grid.range_pct: 0.15`，其餘照實盤。
+**這段期間看的是行為對不對，不是賺多少**；幾週的損益只是雜訊。
+
+⚠ `range_pct` 只有在 `range_mode: fixed` 時才生效（grid_runner.py:127）。
+`config.example.yaml` 的預設是 `range_mode: atr` + `regime_filter: true`——
+若照範本抄，改 `range_pct` 會完全沒作用，整個實測白做。務必確認紙上 config 是
+`range_mode: fixed`、`regime_filter: false`。
+
+跑完之後的驗收（工具已寫好）：
+
+```bash
+# 1. 匯出紙上成交
+docker compose run --rm grid export-trades --out /app/data/paper_export
+# 2. 重播同一段時間，比對買賣點與破網次數
+python tools/grid_paper_replay.py \
+    --trades paper_export/trades.csv \
+    --grid-meta paper_export/grid_meta.csv --rp 0.15
+```
+
+`grid_paper_replay.py` 會先自我檢查（事件版模擬器必須和已驗收的 `sim()` 逐項
+相同，不同就中止），再輸出次數比對與逐筆配對。**看次數與吻合度，不要看損益差幾塊**
+——滑價、成交價、Bitstamp 與派網的價差都會讓損益不同，那不代表行為不吻合。
+吻合度的分母是聯集，漏掉的實際成交也會扣分。
+次數差一倍或倒貨次數對不上 = 行為不吻合，回測結論不能往實盤推；
+**此時要找出差在哪裡，不是改參數讓它看起來吻合**。
+
+改實盤時注意：改設定重啟後，**現有那組網格會照舊跑完，新區間要等下次重開才生效**。
+
 ## 7c. 帳戶對照
 
 `grid-report` 末尾會查交易所餘額算「帳戶總值」；在 config.yaml 的
