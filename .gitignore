@@ -28,3 +28,7 @@ env/
 .vscode/
 .idea/
 .DS_Store
+
+# 回測研究輸出（檔案大、會重跑，不進版控）
+grid_study_out/
+out_fee*/
