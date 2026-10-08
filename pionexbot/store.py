@@ -47,6 +47,19 @@ class Store:
             );
             """
         )
+        # 既有資料庫的欄位遷移（ALTER 是加欄位，對舊資料安全）
+        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(trades)")}
+        added = False
+        for col, decl in (("fee", "REAL"), ("fee_coin", "TEXT")):
+            if col not in cols:
+                self.conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {decl}")
+                added = True
+        if added:
+            # 記下開始記錄手續費的日期——匯出時才能說清楚「哪一天之後才有」
+            import datetime as _dt
+            if not self._get("fee_since", ""):
+                self._set("fee_since",
+                          _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d"))
         self.conn.commit()
 
     # --- 狀態鍵值 ---
@@ -80,12 +93,17 @@ class Store:
 
     def record_trade(self, *, symbol: str, side: str, base: float, quote: float,
                      price: float, simulated: bool, source: str = "",
-                     order_id: str = "", realized_pnl: float = 0.0) -> None:
+                     order_id: str = "", realized_pnl: float = 0.0,
+                     fee: Optional[float] = None, fee_coin: str = "") -> None:
+        """fee=None 代表「交易所沒回報／抓不到」，存 NULL 而非 0——
+        匯出與分析才能分辨「免手續費」與「未記錄」。"""
         self.conn.execute(
-            "INSERT INTO trades(ts,symbol,side,base,quote,price,simulated,source,order_id,realized_pnl)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO trades(ts,symbol,side,base,quote,price,simulated,"
+            "source,order_id,realized_pnl,fee,fee_coin)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             (time.time(), symbol, side, base, quote, price,
-             1 if simulated else 0, source, order_id, realized_pnl),
+             1 if simulated else 0, source, order_id, realized_pnl,
+             fee, fee_coin or None),
         )
         self.conn.commit()
 
@@ -93,6 +111,19 @@ class Store:
         return self.conn.execute(
             "SELECT * FROM trades ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
+
+    def all_trades(self, symbol: str = "", simulated: Optional[bool] = None
+                   ) -> list[sqlite3.Row]:
+        """全部成交（升冪）。symbol / simulated 可選篩選，供匯出使用。"""
+        q = "SELECT * FROM trades WHERE 1=1"
+        args: list = []
+        if symbol:
+            q += " AND symbol = ?"
+            args.append(symbol.upper())
+        if simulated is not None:
+            q += " AND simulated = ?"
+            args.append(1 if simulated else 0)
+        return self.conn.execute(q + " ORDER BY ts, id", args).fetchall()
 
     def trades_by_source(self, prefix: str) -> list[sqlite3.Row]:
         """依 source 前綴撈全部交易（升冪），供績效儀表重建現金流。"""

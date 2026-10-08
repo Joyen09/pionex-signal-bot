@@ -186,7 +186,8 @@ class GridRunner:
                 symbol=self.symbol, side="SELL", base=res.filled_base,
                 quote=res.filled_quote, price=res.avg_price,
                 simulated=res.simulated, source="grid:close",
-                realized_pnl=res.filled_quote - cost)
+                realized_pnl=res.filled_quote - cost,
+                fee=res.fee, fee_coin=res.fee_coin)
         state["active"] = False
         state["held"] = {}
         self.store.save_grid_state(state)
@@ -350,7 +351,8 @@ class GridRunner:
                     self.store.record_trade(
                         symbol=self.symbol, side="SELL", base=res.filled_base,
                         quote=res.filled_quote, price=res.avg_price,
-                        simulated=res.simulated, source="grid", realized_pnl=profit)
+                        simulated=res.simulated, source="grid", realized_pnl=profit,
+                        fee=res.fee, fee_coin=res.fee_coin)
                     del held[i]
                     # 成交頻繁：只記 log、不外推通知
                     self.notifier.send(f"🟢 網格賣出 @ {res.avg_price:.2f}（+{profit:.2f}）",
@@ -367,7 +369,8 @@ class GridRunner:
                     self.store.record_trade(
                         symbol=self.symbol, side="BUY", base=res.filled_base,
                         quote=res.filled_quote, price=res.avg_price,
-                        simulated=res.simulated, source="grid")
+                        simulated=res.simulated, source="grid",
+                        fee=res.fee, fee_coin=res.fee_coin)
                     self.notifier.send(f"🔴 網格買入 @ {res.avg_price:.2f}",
                                        "info", push=False)
                 else:
