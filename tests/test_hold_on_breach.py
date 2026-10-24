@@ -154,6 +154,23 @@ def test_breach_notification_is_sent_once_not_every_poll():
     assert sum(1 for m in sent if "抱著等" in m) == 1, f"通知了多次：{sent}"
 
 
+def test_startup_message_states_the_sell_behaviour():
+    """改完 config 重啟後，這是唯一能確認 YAML 那行生效的地方。"""
+    def msg(hold, max_loss=0):
+        raw = {"trading": {"symbol": "BTC_USDT"},
+               "grid": {"grids": 8, "quote_per_grid": 12,
+                        "hold_on_breach": hold, "max_loss_quote": max_loss}}
+        r = GridRunner(Config(mode="paper", raw=raw), None,
+                       PaperBroker(client=None), Store(":memory:"), Notifier())
+        return r.startup_message()
+
+    on = msg(True)
+    assert "跌破不賣" in on, f"開著時要講明：{on}"
+    assert "跌破不賣" not in msg(False), "關著時不該出現"
+    both = msg(True, max_loss=5)
+    assert "跌破不賣" in both and "仍會停損" in both, both
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

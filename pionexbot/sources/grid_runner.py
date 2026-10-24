@@ -415,13 +415,24 @@ class GridRunner:
         state["last_price"] = price
         self.store.save_grid_state(state)
 
-    def run_forever(self) -> None:
-        self._running = True
+    def startup_message(self) -> str:
+        """啟動推播內容。
+
+        會把「改變賣出行為」的設定一起報出來——改完 config 重啟後，這是唯一
+        能確認設定真的被讀到的地方（容器啟動成功不代表 YAML 那行有生效）。"""
         mode = "實盤" if self.cfg.is_live else "紙上"
         need = self.quote_per_grid * self.grids
-        self.notifier.send(
-            f"🤖 網格機器人啟動（{mode}模式）｜{self.symbol}｜{self.grids} 格 / 每格 "
-            f"{self.quote_per_grid} USDT（需約 {need:.0f} USDT）", "info", important=True)
+        extra = ""
+        if self.hold_on_breach:
+            extra += "｜跌破不賣（抱著等）"
+        if self.max_loss_quote:
+            extra += f"｜浮虧達 {self.max_loss_quote:.0f} 仍會停損"
+        return (f"🤖 網格機器人啟動（{mode}模式）｜{self.symbol}｜{self.grids} 格 / 每格 "
+                f"{self.quote_per_grid} USDT（需約 {need:.0f} USDT）{extra}")
+
+    def run_forever(self) -> None:
+        self._running = True
+        self.notifier.send(self.startup_message(), "info", important=True)
         while self._running:
             try:
                 self._poll_commands()          # 回覆 Telegram 查詢
