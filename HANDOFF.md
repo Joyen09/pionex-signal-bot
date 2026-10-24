@@ -319,8 +319,33 @@ python tools/grid_paper_replay.py \
 下跌會一路抱著套牢（該年 -53.5）。而且帳面「已實現損益」會變好看——因為
 虧損不再被實現——看績效時要一起看未實現。
 
-測試：`tests/test_hold_on_breach.py` 9 項（含「預設關閉、行為不變」與
+測試：`tests/test_hold_on_breach.py` 11 項（含「預設關閉、行為不變」與
 「max_loss 仍然照賣」兩個回歸鎖）。
+
+**實盤採用的設定（2026-10-24 使用者決定）**：
+
+```yaml
+  hold_on_breach: true
+  max_loss_quote: 0     # 原本是 30，使用者選擇「完全不賣」
+```
+
+兩個都要改才算數：只開 `hold_on_breach` 而 `max_loss_quote` 留著非 0 的值，
+浮虧到那個數字時照樣全部賣掉——使用者要的「不要賣掉全部的比特幣」就不成立。
+這一題我漏看過一次（誤以為是 0），對帳時要記得兩個一起看。
+
+⚠ 從此**浮虧沒有上限**。回測的「跌破不賣」在 2022 年是 -53.5（本金 108）。
+
+### 這次部署踩到的兩個坑（2026-10-24）
+
+1. **`git fetch origin <branch>` + `git checkout <branch>` 不會更新本機分支。**
+   fetch 更新的是 `origin/<branch>`，checkout 切到的是本機同名舊分支。實盤
+   因此 build 了 67 個 commit 之前的程式碼：`hold_on_breach` 被忽略、Discord
+   推播整個失效（舊碼還沒有 Discord）。正確做法是切完再 `git pull origin <branch>`，
+   或直接 `git checkout -B <branch> origin/<branch>`。
+   判斷方法：`git log --oneline -1` 對一下遠端最新的 commit。
+2. **`config.yaml` 是掛載的，不是打包進映像。** 只改設定用
+   `docker compose restart grid` 就好，不用重新 build（e2-micro 上要十幾分鐘）。
+   只有 `.py` 有改才需要 build。
 
 ## 7c. 帳戶對照
 
