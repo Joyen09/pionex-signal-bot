@@ -42,6 +42,12 @@ class GridRunner:
         self.breakout_buffer = float(g.get("breakout_buffer", 0.02))
         self.max_loss_quote = float(g.get("max_loss_quote", 0) or 0) or None
         self.reset_on_breakout = bool(g.get("reset_on_breakout", True))
+        # 跌破下緣時不認賠全賣，抱著等價格回來（網格維持運作，回來就照常收割）。
+        # 回測（±5%、九年）：全賣 -118.7、抱著等 +116.6，最大回撤 80.5 → 63.4。
+        # 注意：這不是「沒有風險」，而是把已實現虧損換成無限期的浮虧——2022 年
+        # 那種單邊下跌會抱著一路套牢（該年 -53.5），要能接受才開。
+        # max_loss_quote 不受此開關影響：那是你另外明確設的停損，仍然會賣。
+        self.hold_on_breach = bool(g.get("hold_on_breach", False))
 
         # ① ATR 動態區間：range_mode = fixed | atr
         self.range_mode = str(g.get("range_mode", "fixed")).lower()
@@ -224,6 +230,12 @@ class GridRunner:
         if not held:
             lines.append("  （目前空手）")
         lines.append(f"投入成本 {invested:.2f} USDT，未實現 {unreal:+.2f}")
+        if self.hold_on_breach:
+            breach_px = lower * (1 - self.breakout_buffer)
+            if price and price < breach_px:
+                lines.append(f"🟡 已跌破 {breach_px:.0f}，設定為不賣、抱著等")
+            else:
+                lines.append(f"設定：跌破 {breach_px:.0f} 不賣，抱著等")
         lines.append(f"本網格已實現利潤 {state.get('realized', 0.0):+.2f}")
         try:
             total_pnl = self.store.stats_since(0)[1]
@@ -330,12 +342,31 @@ class GridRunner:
         unreal = sum(q * (price - levels[i]) for i, q in held.items())
         breach_down = price < lower * (1 - self.breakout_buffer)
         max_loss_hit = self.max_loss_quote is not None and unreal <= -self.max_loss_quote
-        if breach_down or max_loss_hit:
+        # hold_on_breach：跌破就抱著等，不認賠全賣。刻意「不 return」——要讓流程
+        # 落到下面的正常成交迴圈，價格回來時才會照常收割（這也與回測 mode 1 一致）。
+        # max_loss_hit 不吃這個開關：那是使用者另外明確設的停損，仍然照賣。
+        holding_through = (breach_down and self.hold_on_breach
+                           and held and not max_loss_hit)
+        if holding_through:
+            if not state.get("breach_notified"):
+                state["breach_notified"] = True
+                self.store.save_grid_state(state)
+                self.notifier.send(
+                    f"🟡 跌破下緣 {lower:.2f}（現價 {price:.2f}）但設定為不賣，"
+                    f"抱著等。目前存貨 {sum(held.values()):.8f} BTC、"
+                    f"浮虧 {unreal:+.2f} USDT。", "info", important=True)
+        elif breach_down or max_loss_hit:
             reason = "跌破下緣" if breach_down else f"未實現虧損達 {unreal:.2f}"
             self._close_grid(state, price, reason)
             if self.reset_on_breakout:
                 self._try_open(price)   # 重開前先確認不是強趨勢
             return
+        elif state.get("breach_notified") and price >= lower:
+            # 回到下緣之上才解除（用下緣而非跌破線當門檻，避免在邊界反覆通知）
+            state["breach_notified"] = False
+            self.notifier.send(
+                f"🟢 價格回到下緣之上（{price:.2f} ≥ {lower:.2f}），"
+                f"網格恢復正常收割。", "info", important=True)
 
         # 突破上緣 → 獲利了結後向上重新定位
         if price > upper * (1 + self.breakout_buffer) and self.reset_on_breakout:
