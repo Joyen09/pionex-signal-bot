@@ -61,6 +61,7 @@ class Notifier:
         self.line_user = line_user_id
         self.line_enabled = line_enabled and bool(line_token and line_user_id)
         self._last_line_msg: Optional[str] = None  # 簡單去重，避免重複錯誤洗版
+        self._warned_no_channel = False            # 「沒有任何通知出口」只警告一次
 
     def send(self, message: str, level: str = "info", important: bool = False,
              push: bool = True) -> None:
@@ -77,6 +78,16 @@ class Notifier:
             self._send_telegram(message)
         if self.line_enabled and (important or level == "error"):
             self._send_line(message)
+        # 一個出口都沒有 = 訊息只進了 log，手機上什麼都收不到。
+        # 這種「安靜的失效」最難查（沒有錯誤、也沒有訊息），所以明講一次。
+        if not (self.discord_enabled or self.discord_bot_enabled
+                or self.tg_enabled or self.line_enabled):
+            if not self._warned_no_channel:
+                self._warned_no_channel = True
+                logger.warning(
+                    "通知沒有任何出口：Discord/Telegram/LINE 全部未啟用。"
+                    "檢查 config.yaml 的 notify.*.enabled，以及 .env 是否"
+                    "真的被容器讀到（docker compose 的 env_file）。")
 
     def get_updates(self, offset: Optional[int] = None, timeout: int = 0) -> list:
         """讀取 Telegram 新訊息（getUpdates）。回傳 update 物件 list。"""

@@ -171,6 +171,34 @@ def test_startup_message_states_the_sell_behaviour():
     assert "跌破不賣" in both and "仍會停損" in both, both
 
 
+def test_warns_once_when_no_notification_channel_is_enabled():
+    """最難查的失效：沒有錯誤、也沒有訊息。必須留下一行警告，但只留一次。"""
+    import io
+    import logging
+
+    buf = io.StringIO()
+    h = logging.StreamHandler(buf)
+    lg = logging.getLogger("pionexbot")
+    lg.addHandler(h)
+    old = lg.level
+    lg.setLevel(logging.WARNING)
+    try:
+        n = Notifier()                      # 全部管道都沒啟用
+        for _ in range(3):
+            n.send("test")
+        out = buf.getvalue()
+        assert out.count("通知沒有任何出口") == 1, f"應只警告一次：{out}"
+
+        buf.truncate(0)
+        buf.seek(0)
+        Notifier(discord_webhook_url="https://example.invalid/x",
+                 discord_enabled=True).send("test")
+        assert "通知沒有任何出口" not in buf.getvalue(), "有出口時不該警告"
+    finally:
+        lg.removeHandler(h)
+        lg.setLevel(old)
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]
