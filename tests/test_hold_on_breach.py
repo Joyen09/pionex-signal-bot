@@ -199,6 +199,95 @@ def test_warns_once_when_no_notification_channel_is_enabled():
         lg.setLevel(old)
 
 
+def _runner_delay(delay_min, hold=False, max_loss=0):
+    raw = {"trading": {"symbol": "BTC_USDT"},
+           "grid": {"auto_range": True, "range_pct": 0.10, "grids": 8,
+                    "quote_per_grid": 12, "breakout_buffer": 0.02,
+                    "reset_on_breakout": True, "hold_on_breach": hold,
+                    "max_loss_quote": max_loss,
+                    "dump_delay_minutes": delay_min}}
+    store = Store(":memory:")
+    broker = PaperBroker(client=None)
+    r = GridRunner(Config(mode="paper", raw=raw), None, broker, store, Notifier())
+    return r, store, broker
+
+
+def test_delay_defaults_to_zero_so_behaviour_is_unchanged():
+    r, _, _ = _runner_delay(0)
+    assert r.dump_delay_min == 0
+    r2, store, b = _runner_delay(0)
+    _setp(b, 60000); r2.run_once()
+    _setp(b, 57000); r2.run_once()
+    _setp(b, 40000); r2.run_once()
+    assert _dumps(store), "延遲為 0 時必須立刻倒貨"
+
+
+def test_delay_arms_instead_of_selling_immediately():
+    r, store, b = _runner_delay(60)
+    _setp(b, 60000); r.run_once()
+    _setp(b, 57000); r.run_once()
+    held = dict(store.load_grid_state()["held"])
+    _setp(b, 40000); r.run_once()          # 條件成立，但只該「上膛」
+    st = store.load_grid_state()
+    assert not _dumps(store), "警報期間不得賣出"
+    assert st.get("dump_armed_ts"), "應記下警報時間"
+    assert st["active"], "網格要維持運作"
+    # 既有的格子一個都不能被賣掉；但網格仍在運作，所以可以再買更低的格
+    for k, v in held.items():
+        assert st["held"].get(k) == v, f"第 {k} 格被動到了"
+    assert not [t for t in store.all_trades() if t["side"] == "SELL"], \
+        "警報期間不得有任何賣出"
+
+
+def test_delay_sells_once_the_wait_has_elapsed():
+    import time as _t
+    r, store, b = _runner_delay(60)
+    _setp(b, 60000); r.run_once()
+    _setp(b, 57000); r.run_once()
+    _setp(b, 40000); r.run_once()
+    st = store.load_grid_state()
+    st["dump_armed_ts"] = _t.time() - 61 * 60      # 假裝已經等了 61 分鐘
+    store.save_grid_state(st)
+    _setp(b, 40000); r.run_once()
+    assert _dumps(store), "等待結束且條件仍成立 → 必須賣"
+
+
+def test_alarm_is_cancelled_when_price_recovers():
+    """延遲的價值就在這裡：這一次不用賣了。"""
+    r, store, b = _runner_delay(60)
+    _setp(b, 60000); r.run_once()
+    _setp(b, 57000); r.run_once()
+    _setp(b, 40000); r.run_once()
+    assert store.load_grid_state().get("dump_armed_ts")
+    _setp(b, 58000); r.run_once()                  # 回到條件之上
+    assert not store.load_grid_state().get("dump_armed_ts"), "警報應解除"
+    assert not _dumps(store), "整段都不該賣"
+
+
+def test_armed_state_survives_restart():
+    """輪詢每 20 秒一輪，計時必須存在 DB 裡，重啟不能從零開始。"""
+    import time as _t
+    r, store, b = _runner_delay(60)
+    _setp(b, 60000); r.run_once()
+    _setp(b, 57000); r.run_once()
+    _setp(b, 40000); r.run_once()
+    armed = store.load_grid_state()["dump_armed_ts"]
+    assert _t.time() - armed < 60, "剛上膛"
+    r2 = GridRunner(r.cfg, None, b, store, Notifier())   # 模擬重啟
+    _setp(b, 40000); r2.run_once()
+    assert store.load_grid_state()["dump_armed_ts"] == armed, "重啟後計時被重置了"
+
+
+def test_delay_also_applies_to_max_loss_stop():
+    """實盤 2026-11-21 是浮虧停損觸發的，延遲必須也蓋到它。"""
+    r, store, b = _runner_delay(60, hold=True, max_loss=0.5)
+    _setp(b, 60000); r.run_once()
+    _setp(b, 57000); r.run_once()
+    _setp(b, 40000); r.run_once()
+    assert not _dumps(store), "浮虧停損也要先等"
+    assert store.load_grid_state().get("dump_armed_ts"), "浮虧停損也要上膛"
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

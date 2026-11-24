@@ -48,6 +48,10 @@ class GridRunner:
         # 那種單邊下跌會抱著一路套牢（該年 -53.5），要能接受才開。
         # max_loss_quote 不受此開關影響：那是你另外明確設的停損，仍然會賣。
         self.hold_on_breach = bool(g.get("hold_on_breach", False))
+        # 倒貨條件要連續成立這麼多分鐘才真的賣；0 = 立刻賣（原行為）。
+        # 依據：九年 437 次倒貨觸發，之後 1~48 小時回升的比例都是 59~61%、
+        # 中位數為正——倒貨當下的價格系統性偏低，等一下再賣比較好。
+        self.dump_delay_min = int(g.get("dump_delay_minutes", 0) or 0)
 
         # ① ATR 動態區間：range_mode = fixed | atr
         self.range_mode = str(g.get("range_mode", "fixed")).lower()
@@ -230,6 +234,13 @@ class GridRunner:
         if not held:
             lines.append("  （目前空手）")
         lines.append(f"投入成本 {invested:.2f} USDT，未實現 {unreal:+.2f}")
+        armed = float(state.get("dump_armed_ts") or 0)
+        if armed:
+            import time as _t
+            lines.append(f"⏳ 倒貨警報中，已等 {(_t.time() - armed) / 60:.0f}/"
+                         f"{self.dump_delay_min} 分鐘")
+        elif self.dump_delay_min:
+            lines.append(f"設定：倒貨前先等 {self.dump_delay_min} 分鐘再確認")
         if self.hold_on_breach:
             breach_px = lower * (1 - self.breakout_buffer)
             if price and price < breach_px:
@@ -357,10 +368,41 @@ class GridRunner:
                     f"浮虧 {unreal:+.2f} USDT。", "info", important=True)
         elif breach_down or max_loss_hit:
             reason = "跌破下緣" if breach_down else f"未實現虧損達 {unreal:.2f}"
-            self._close_grid(state, price, reason)
-            if self.reset_on_breakout:
-                self._try_open(price)   # 重開前先確認不是強趨勢
-            return
+            # dump_delay_minutes：倒貨條件要「連續成立」這麼久才真的賣。
+            # 九年回測：倒貨觸發後 1~48 小時回升的比例都是 59~61%、中位數為正，
+            # 代表倒貨當下的價格系統性偏低。延遲後合計由 -118.7 變成正值。
+            # 等待期間刻意不 return，讓流程落到正常成交迴圈（與回測一致）。
+            if self.dump_delay_min > 0:
+                armed = float(state.get("dump_armed_ts") or 0)
+                waited = time.time() - armed if armed else 0.0
+                if not armed:
+                    state["dump_armed_ts"] = time.time()
+                    self.store.save_grid_state(state)
+                    self.notifier.send(
+                        f"⏳ 倒貨警報（{reason}）：現價 {price:.2f}、浮虧 "
+                        f"{unreal:+.2f}。{self.dump_delay_min} 分鐘後若仍成立才賣；"
+                        f"中途恢復就取消。", "info", important=True)
+                elif waited < self.dump_delay_min * 60:
+                    pass          # 還在等，這輪照常跑網格
+                else:
+                    state.pop("dump_armed_ts", None)
+                    self._close_grid(state, price,
+                                     f"{reason}（已等 {waited / 60:.0f} 分鐘仍成立）")
+                    if self.reset_on_breakout:
+                        self._try_open(price)
+                    return
+            else:
+                self._close_grid(state, price, reason)
+                if self.reset_on_breakout:
+                    self._try_open(price)   # 重開前先確認不是強趨勢
+                return
+        elif state.get("dump_armed_ts"):
+            # 條件消失 → 解除警報。這正是延遲的價值所在：這一次不用賣了。
+            state.pop("dump_armed_ts", None)
+            self.store.save_grid_state(state)
+            self.notifier.send(
+                f"✅ 倒貨警報解除：現價 {price:.2f} 已回到條件之上，這次不賣。",
+                "info", important=True)
         elif state.get("breach_notified") and price >= lower:
             # 回到下緣之上才解除（用下緣而非跌破線當門檻，避免在邊界反覆通知）
             state["breach_notified"] = False
@@ -425,6 +467,8 @@ class GridRunner:
         extra = ""
         if self.hold_on_breach:
             extra += "｜跌破不賣（抱著等）"
+        if self.dump_delay_min:
+            extra += f"｜倒貨前等 {self.dump_delay_min} 分鐘"
         if self.max_loss_quote:
             extra += f"｜浮虧達 {self.max_loss_quote:.0f} 仍會停損"
         return (f"🤖 網格機器人啟動（{mode}模式）｜{self.symbol}｜{self.grids} 格 / 每格 "
